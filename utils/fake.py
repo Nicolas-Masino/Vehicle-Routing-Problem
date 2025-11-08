@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-
+  
 def optimizar_ruta_fake(df, velocidad_prom):
     if df.empty:
         return df, 0, 0
