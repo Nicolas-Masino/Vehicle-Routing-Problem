@@ -17,6 +17,7 @@ from ortools.constraint_solver import routing_enums_pb2
 from ortools.constraint_solver import pywrapcp
 import os
 import time
+from analisis_sensibilidad import AnalizadorSensibilidad
 
 # ============================================================================
 # CONFIGURACIÓN DE LA PÁGINA
@@ -481,6 +482,69 @@ def main():
 
         st.markdown("---")
 
+        # Parámetros económicos
+        st.subheader("Parámetros Económicos")
+
+        col_precio1, col_precio2 = st.columns(2)
+
+        with col_precio1:
+            precio_nafta = st.number_input(
+                "Precio Nafta ($/L)",
+                min_value=0.0,
+                value=1000.0,
+                step=50.0,
+                format="%.2f",
+                help="Precio del litro de nafta en pesos"
+            )
+
+            rendimiento_vehiculo = st.number_input(
+                "Rendimiento (km/L)",
+                min_value=0.1,
+                value=10.0,
+                step=0.5,
+                format="%.2f",
+                help="Kilómetros que recorre el vehículo por litro de nafta"
+            )
+
+            velocidad_promedio_kmh = st.number_input(
+                "Velocidad Promedio (km/h)",
+                min_value=1.0,
+                value=30.0,
+                step=5.0,
+                format="%.1f",
+                help="Velocidad promedio del vehículo en la ciudad"
+            )
+
+        with col_precio2:
+            precio_base_por_pedido = st.number_input(
+                "Precio Base ($/pedido)",
+                min_value=0.0,
+                value=2000.0,
+                step=100.0,
+                format="%.2f",
+                help="Precio base cobrado por cada pedido entregado"
+            )
+
+            precio_por_km = st.number_input(
+                "Precio por km ($/km)",
+                min_value=0.0,
+                value=150.0,
+                step=10.0,
+                format="%.2f",
+                help="Precio variable cobrado por kilómetro recorrido"
+            )
+
+            costo_chofer_por_hora = st.number_input(
+                "Costo Chofer ($/h)",
+                min_value=0.0,
+                value=2000.0,
+                step=100.0,
+                format="%.2f",
+                help="Costo por hora del chofer/conductor"
+            )
+
+        st.markdown("---")
+
         # Ingreso de pedidos
         st.subheader("Ingrese sus pedidos")
 
@@ -608,6 +672,14 @@ def main():
                 st.session_state['distance_matrix'] = distance_matrix
                 st.session_state['optimization_time'] = elapsed_time
 
+                # Guardar parámetros económicos
+                st.session_state['precio_nafta'] = precio_nafta
+                st.session_state['rendimiento_vehiculo'] = rendimiento_vehiculo
+                st.session_state['precio_base_por_pedido'] = precio_base_por_pedido
+                st.session_state['precio_por_km'] = precio_por_km
+                st.session_state['costo_chofer_por_hora'] = costo_chofer_por_hora
+                st.session_state['velocidad_promedio_kmh'] = velocidad_promedio_kmh
+
                 st.success(f"Optimización completada en {elapsed_time:.2f} segundos")
                 st.rerun()
 
@@ -675,6 +747,111 @@ def main():
                 ).add_to(mapa_inicial)
 
             st_folium(mapa_inicial, width=700, height=600, key="mapa_inicial", returned_objects=[])
+
+        # ====================================================================
+        # ANÁLISIS ECONÓMICO Y DE SENSIBILIDAD
+        # ====================================================================
+
+        required_keys = ['precio_nafta', 'rendimiento_vehiculo', 'precio_base_por_pedido', 'precio_por_km', 'costo_chofer_por_hora', 'velocidad_promedio_kmh']
+        if 'all_routes' in st.session_state and all(k in st.session_state for k in required_keys):
+            all_routes = st.session_state['all_routes']
+            data = st.session_state['data']
+
+            st.markdown("---")
+            st.header("Análisis Económico")
+
+            # Obtener parámetros económicos
+            precio_nafta_sess = st.session_state['precio_nafta']
+            rendimiento_sess = st.session_state['rendimiento_vehiculo']
+            precio_base_sess = st.session_state['precio_base_por_pedido']
+            precio_por_km_sess = st.session_state['precio_por_km']
+            costo_chofer_sess = st.session_state['costo_chofer_por_hora']
+            velocidad_sess = st.session_state['velocidad_promedio_kmh']
+
+            # Calcular distancias y número de pedidos
+            total_distance = sum(r['distance'] for r in all_routes)
+            num_pedidos = sum(r['packages'] for r in all_routes)
+            distancias_por_ruta = [r['distance'] / 1000 for r in all_routes]  # Convertir de metros a km
+            distancia_total_km = total_distance / 1000
+
+            # Crear analizador
+            try:
+                analizador = AnalizadorSensibilidad(
+                    distancia_total_km=distancia_total_km,
+                    num_rutas=len(all_routes),
+                    num_pedidos=num_pedidos,
+                    distancias_por_ruta=distancias_por_ruta,
+                    precio_nafta=precio_nafta_sess,
+                    rendimiento_vehiculo=rendimiento_sess,
+                    precio_base_por_pedido=precio_base_sess,
+                    precio_por_km=precio_por_km_sess,
+                    costo_chofer_por_hora=costo_chofer_sess,
+                    velocidad_promedio_kmh=velocidad_sess
+                )
+
+                # Obtener resultados
+                costos = analizador.calcular_costos_operacion()
+                ingresos = analizador.calcular_ingresos()
+                margen = analizador.calcular_margen()
+
+                # Mostrar métricas económicas en 4 columnas
+                col_eco1, col_eco2, col_eco3, col_eco4 = st.columns(4)
+
+                with col_eco1:
+                    st.metric(
+                        "💵 Costo Operativo",
+                        f"${costos['costo_total']:,.2f}",
+                        help=f"Nafta: ${costos['costo_total_nafta']:,.2f} + Chofer: ${costos['costo_total_chofer']:,.2f} ({costos['tiempo_total_horas']:.1f}h)"
+                    )
+
+                with col_eco2:
+                    st.metric(
+                        "💰 Ingreso Total",
+                        f"${ingresos['ingreso_total']:,.2f}",
+                        help=f"Base: ${ingresos['ingreso_base']:,.2f} + Variable: ${ingresos['ingreso_variable']:,.2f}"
+                    )
+
+                with col_eco3:
+                    margen_delta = f"{margen['rentabilidad_porcentaje']:+.1f}%"
+                    margen_color = "normal" if margen['margen_total'] >= 0 else "inverse"
+
+                    st.metric(
+                        "📊 Margen Neto",
+                        f"${margen['margen_total']:,.2f}",
+                        delta=margen_delta,
+                        delta_color=margen_color
+                    )
+
+                with col_eco4:
+                    st.metric(
+                        "📈 Rentabilidad",
+                        f"{margen['rentabilidad_porcentaje']:.1f}%"
+                    )
+
+                st.markdown("---")
+                st.subheader("Análisis de Sensibilidad")
+
+                # Mostrar tabla estilo LINGO
+                tabla_lingo = analizador.generar_tabla_lingo()
+                st.dataframe(tabla_lingo, use_container_width=True, hide_index=True)
+
+                # Interpretaciones
+                st.markdown("##### Interpretación")
+                interpretaciones = analizador.obtener_interpretaciones()
+
+                for interpretacion in interpretaciones:
+                    # Determinar el tipo de mensaje según el contenido
+                    if interpretacion.startswith("✓"):
+                        st.success(interpretacion)
+                    elif interpretacion.startswith("⚠"):
+                        st.warning(interpretacion)
+                    elif interpretacion.startswith("✗"):
+                        st.error(interpretacion)
+                    else:
+                        st.info(interpretacion)
+
+            except Exception as e:
+                st.error(f"Error en análisis económico: {e}")
 
     # ========================================================================
     # COLUMNA DERECHA - ÓRDENES Y MÉTRICAS
