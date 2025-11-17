@@ -10,10 +10,9 @@
 6. [Función Objetivo](#6-función-objetivo)
 7. [Restricciones](#7-restricciones)
 8. [Formulación Matemática Completa](#8-formulación-matemática-completa)
-9. [Parámetros Económicos](#9-parámetros-económicos)
-10. [Análisis de Sensibilidad](#10-análisis-de-sensibilidad)
-11. [Método de Solución](#11-método-de-solución)
-12. [Archivos de Implementación](#12-archivos-de-implementación)
+9. [Método de Solución](#9-método-de-solución)
+10. [Análisis Económico Post-Optimización](#10-análisis-económico-post-optimización)
+11. [Implementación](#11-implementación)
 
 ---
 
@@ -24,36 +23,37 @@ Este proyecto implementa un **Problema de Ruteo de Vehículos Capacitado (CVRP -
 ### Características del Problema
 
 - **Tipo**: CVRP (Capacitated Vehicle Routing Problem)
-- **Variante implementada**: VRP con capacidad y depósito único
-- **Contexto**: Distribución de última milla para empresa de logística
-- **Ubicación**: Ciudad Autónoma de Buenos Aires (CABA), Argentina
+- **Contexto**: Distribución de última milla en CABA
+- **Aplicación**: Aplicación web interactiva con Streamlit
 - **Objetivo principal**: Minimizar la distancia total recorrida por la flota
-- **Objetivo secundario**: Maximizar la rentabilidad económica de la operación
+- **Objetivo secundario**: Análisis de viabilidad económica de la operación
 
-### Variantes Implementadas
+### Elementos del Problema
 
-El proyecto incluye dos formulaciones:
+El problema consiste en:
 
-1. **TSP Simple** (`optimizador_rutas.py`):
-   - Un solo vehículo sin restricción de capacidad
-   - Todos los pedidos deben ser visitados
+1. **Depósito único**: Centro de distribución donde inician y terminan todas las rutas
+2. **Conjunto de pedidos**: Entregas a realizar en diferentes ubicaciones de CABA
+3. **Flota de vehículos**: Múltiples camiones con capacidad limitada
+4. **Restricción de capacidad**: Cada vehículo puede transportar un máximo de paquetes
+5. **Red vial real**: Distancias calculadas sobre calles y avenidas reales de CABA
 
-2. **CVRP Completo** (`app_vrp.py`):
-   - Múltiples vehículos con restricciones de capacidad
-   - Cada vehículo tiene capacidad limitada de paquetes
+### Decisiones a Tomar
+
+- ¿Qué pedidos debe entregar cada vehículo?
+- ¿En qué orden debe visitar cada cliente?
+- ¿Qué ruta debe seguir cada vehículo?
 
 ---
 
 ## 2. Objetivo del Modelo
 
-El modelo busca determinar las rutas óptimas para una flota de vehículos que deben:
+Determinar las rutas óptimas para una flota de vehículos que minimicen la distancia total recorrida, cumpliendo con:
 
-- Partir desde un centro de distribución (depot)
-- Visitar un conjunto de clientes para entregar pedidos
-- Regresar al centro de distribución
-- Minimizar la distancia total recorrida por todos los vehículos
-- Respetar las restricciones de capacidad de cada vehículo
-- Garantizar que cada cliente sea visitado exactamente una vez
+- Cada pedido debe ser entregado exactamente una vez
+- Cada vehículo debe respetar su capacidad máxima
+- Todos los vehículos parten y regresan al depósito
+- Las rutas deben ser factibles en la red vial de CABA
 
 ---
 
@@ -61,647 +61,270 @@ El modelo busca determinar las rutas óptimas para una flota de vehículos que d
 
 ### Conjuntos
 
-- **N**: Conjunto de todos los nodos (locaciones)
-  - N = {0, 1, 2, ..., n}
-  - n = número total de pedidos
+**N**: Conjunto de todos los nodos (ubicaciones)
+- N = {0, 1, 2, ..., n}
+- Donde n = número de pedidos
 
-- **C**: Conjunto de clientes (pedidos)
-  - C = {1, 2, ..., n}
-  - C ⊂ N
+**C**: Conjunto de clientes (pedidos)
+- C = {1, 2, ..., n}
+- C ⊂ N
 
-- **V**: Conjunto de vehículos (camiones)
-  - V = {1, 2, ..., K}
-  - K = número de vehículos disponibles
+**V**: Conjunto de vehículos (camiones)
+- V = {1, 2, ..., K}
+- K = número de vehículos disponibles
 
-- **A**: Conjunto de arcos
-  - A = {(i, j) : i, j ∈ N, i ≠ j}
+**A**: Conjunto de arcos (conexiones entre ubicaciones)
+- A = {(i, j) : i, j ∈ N, i ≠ j}
 
 ### Índices
 
 - **i, j**: Índices de nodos (i, j ∈ N)
 - **k**: Índice de vehículo (k ∈ V)
-- **0**: Índice del depósito (depot)
+- **0**: Índice del depósito (nodo depot)
+
+### Estructura de Datos Implementada
+
+```python
+# app_vrp.py, líneas 221-227
+data = {
+    'distance_matrix': distance_matrix.tolist(),  # matriz NxN en metros
+    'demands': [0] + [1] * (len(all_locations) - 1),  # demandas
+    'vehicle_capacities': [vehicle_capacity] * num_vehicles,  # capacidades
+    'num_vehicles': num_vehicles,  # K vehículos
+    'depot': 0  # nodo 0 es el depósito
+}
+```
 
 ---
 
 ## 4. Parámetros
 
-### Parámetros de Distancia
+### 4.1 Parámetros de Red
 
-- **d<sub>ij</sub>**: Distancia en metros del nodo i al nodo j
-  - Calculada mediante OSRM API (distancia real en calles)
-  - Fallback a distancia euclidiana si OSRM falla
-  - Convertida a enteros para OR-Tools: d<sub>ij</sub> = distancia_km × 1000
+#### Matriz de Distancias
 
-### Parámetros de Demanda
+**d<sub>ij</sub>**: Distancia del nodo i al nodo j (en metros)
 
-- **q<sub>i</sub>**: Demanda del cliente i (número de paquetes)
-  - q<sub>0</sub> = 0 (el depósito no tiene demanda)
-  - q<sub>i</sub> = 1 para todo i ∈ C (cada pedido = 1 paquete)
+**Método de cálculo** (`app_vrp.py`, líneas 121-166):
 
-### Parámetros de Capacidad
+1. **OSRM API** (método principal):
+   ```python
+   url = "http://router.project-osrm.org/table/v1/driving/{coords}?annotations=distance"
+   ```
+   - Utiliza red vial real de OpenStreetMap
+   - Considera sentidos de circulación
+   - Distancias en metros por calles reales
 
-- **Q<sub>k</sub>**: Capacidad máxima del vehículo k (número de paquetes)
-  - Configurable en la UI: entre 5 y 15 paquetes
-  - Por defecto: Q<sub>k</sub> = 15 para todo k ∈ V
+2. **Distancia Euclidiana** (fallback si OSRM falla):
+   ```python
+   distance_matrix[i][j] = sqrt(
+       ((lat2 - lat1) × 111000)² +
+       ((lon2 - lon1) × 111000 × cos(lat1))²
+   )
+   ```
+   - Factor de conversión: 1° latitud ≈ 111,000 metros
+   - Factor de conversión: 1° longitud ≈ 111,000 × cos(latitud) metros
 
-### Parámetros de Flota
+**Formato**: Matriz entera NxN en metros (requerido por OR-Tools)
 
-- **K**: Número de vehículos disponibles
-  - Configurable en la UI: entre 1 y 5 vehículos
-  - Por defecto: K = 3
+#### Sistema de Cache
 
-### Parámetros Económicos
+```python
+# app_vrp.py, líneas 136-143
+cache_file = f'vrp_streamlit_{n}.npz'
+# Almacena matrices en formato NumPy comprimido
+```
+
+---
+
+### 4.2 Parámetros de Demanda
+
+**q<sub>i</sub>**: Demanda del nodo i (número de paquetes)
+
+**Implementación** (`app_vrp.py`, línea 224):
+```python
+data['demands'] = [0] + [1] * (len(all_locations) - 1)
+```
+
+- **q<sub>0</sub> = 0**: El depósito no tiene demanda
+- **q<sub>i</sub> = 1**: Cada pedido representa 1 paquete (∀i ∈ C)
+
+---
+
+### 4.3 Parámetros de Flota
+
+#### Ubicaciones del Depósito
+
+5 ubicaciones predefinidas en CABA (`app_vrp.py`, líneas 450-456):
+
+| Ubicación | Latitud | Longitud |
+|-----------|---------|----------|
+| Retiro | -34.603277 | -58.373207 |
+| Palermo | -34.577882 | -58.420664 |
+| Recoleta | -34.588249 | -58.396328 |
+| San Telmo | -34.621340 | -58.372150 |
+| Belgrano | -34.562991 | -58.457417 |
+
+**También permite**: Ubicación personalizada con coordenadas manuales
+
+#### Número de Vehículos
+
+**K**: Número de vehículos disponibles
+
+**Configuración** (`app_vrp.py`, línea 480):
+```python
+num_vehicles = st.slider("Cantidad de Camiones", min_value=1, max_value=5, value=3)
+```
+
+- **Rango**: 1 a 5 vehículos
+- **Por defecto**: 3 vehículos
+
+#### Capacidad de Vehículos
+
+**Q<sub>k</sub>**: Capacidad máxima del vehículo k (paquetes)
+
+**Configuración** (`app_vrp.py`, línea 481):
+```python
+vehicle_capacity = st.slider("Capacidad por Camión", min_value=5, max_value=15, value=15)
+```
+
+**Implementación**:
+```python
+data['vehicle_capacities'] = [vehicle_capacity] * num_vehicles
+```
+
+- **Rango**: 5 a 15 paquetes por vehículo
+- **Por defecto**: 15 paquetes
+- **Nota**: Todos los vehículos tienen la misma capacidad
+
+---
+
+### 4.4 Parámetros Económicos
 
 #### Parámetros de Costo
 
-- **p<sub>nafta</sub>**: Precio de nafta por litro ($/L)
-  - Por defecto: $1,000.00/L
+**p<sub>nafta</sub>**: Precio de nafta por litro ($/L)
 
-- **r<sub>vehiculo</sub>**: Rendimiento del vehículo (km/L)
-  - Por defecto: 10.0 km/L
+**Configuración** (`app_vrp.py`, líneas 491-498):
+```python
+precio_nafta = st.number_input(
+    "Precio Nafta ($/L)",
+    min_value=0.0,
+    value=1000.0,  # default
+    step=50.0,
+    format="%.2f"
+)
+```
+- **Rango**: ≥ 0
+- **Por defecto**: $1,000.00/L
+- **Incremento**: $50
 
-- **v<sub>promedio</sub>**: Velocidad promedio (km/h)
-  - Por defecto: 30.0 km/h
+---
 
-- **c<sub>chofer</sub>**: Costo del chofer por hora ($/h)
-  - Por defecto: $2,000.00/h
+**r<sub>vehiculo</sub>**: Rendimiento del vehículo (km/L)
+
+**Configuración** (`app_vrp.py`, líneas 500-507):
+```python
+rendimiento_vehiculo = st.number_input(
+    "Rendimiento (km/L)",
+    min_value=0.1,
+    value=10.0,  # default
+    step=0.5,
+    format="%.2f"
+)
+```
+- **Rango**: ≥ 0.1 km/L
+- **Por defecto**: 10.0 km/L
+- **Incremento**: 0.5 km/L
+
+---
+
+**v<sub>promedio</sub>**: Velocidad promedio (km/h)
+
+**Configuración** (`app_vrp.py`, líneas 509-516):
+```python
+velocidad_promedio_kmh = st.number_input(
+    "Velocidad Promedio (km/h)",
+    min_value=1.0,
+    value=30.0,  # default
+    step=5.0,
+    format="%.1f"
+)
+```
+- **Rango**: ≥ 1.0 km/h
+- **Por defecto**: 30.0 km/h
+- **Incremento**: 5.0 km/h
+
+---
+
+**c<sub>chofer</sub>**: Costo del chofer por hora ($/h)
+
+**Configuración** (`app_vrp.py`, líneas 537-544):
+```python
+costo_chofer_por_hora = st.number_input(
+    "Costo Chofer ($/h)",
+    min_value=0.0,
+    value=2000.0,  # default
+    step=100.0,
+    format="%.2f"
+)
+```
+- **Rango**: ≥ 0
+- **Por defecto**: $2,000.00/h
+- **Incremento**: $100
+
+---
 
 #### Parámetros de Ingreso
 
-- **p<sub>base</sub>**: Precio base por pedido entregado ($)
-  - Por defecto: $2,000.00/pedido
+**p<sub>base</sub>**: Precio base por pedido entregado ($)
 
-- **p<sub>km</sub>**: Precio variable por kilómetro ($/km)
-  - Por defecto: $150.00/km
-
-### Parámetros Geográficos
-
-- **lat<sub>i</sub>**: Latitud del nodo i (-90° a 90°)
-- **lon<sub>i</sub>**: Longitud del nodo i (-180° a 180°)
-- **comuna<sub>i</sub>**: Comuna de CABA donde se ubica el nodo i (1-15)
-
-### Parámetros de Optimización
-
-- **t<sub>max</sub>**: Tiempo límite de búsqueda
-  - Por defecto: 30 segundos
-
-- **estrategia<sub>inicial</sub>**: PATH_CHEAPEST_ARC
-  - Construye la solución inicial agregando el arco más barato
-
-- **metaheurística</sub>**: GUIDED_LOCAL_SEARCH
-  - Algoritmo de búsqueda local guiada para escapar de óptimos locales
-
----
-
-## 5. Variables de Decisión
-
-### Variables Binarias
-
-**x<sub>ijk</sub>** ∈ {0, 1} para todo i, j ∈ N, k ∈ V
-
-- x<sub>ijk</sub> = 1 si el vehículo k viaja directamente del nodo i al nodo j
-- x<sub>ijk</sub> = 0 en caso contrario
-
-### Variables Auxiliares (implícitas en OR-Tools)
-
-**y<sub>ik</sub>** ∈ {0, 1} para todo i ∈ C, k ∈ V
-
-- y<sub>ik</sub> = 1 si el cliente i es atendido por el vehículo k
-- y<sub>ik</sub> = 0 en caso contrario
-
-**u<sub>ik</sub>** ≥ 0 para todo i ∈ N, k ∈ V
-
-- u<sub>ik</sub> = carga acumulada del vehículo k al visitar el nodo i
-- Usada para verificar la restricción de capacidad
-
----
-
-## 6. Función Objetivo
-
-### Objetivo: Minimizar Distancia Total
-
-```
-Minimizar Z = Σ Σ Σ d_ij × x_ijk
-              k∈V i∈N j∈N
-```
-
-**Significado**: Minimizar la suma de las distancias de todos los arcos recorridos por todos los vehículos.
-
-### Métricas Derivadas
-
-Una vez resuelta la optimización, se calculan:
-
-#### Costo Total de Operación
-
-```
-C_total = C_nafta + C_chofer
-
-donde:
-C_nafta = (D_total / r_vehiculo) × p_nafta
-C_chofer = (D_total / v_promedio) × c_chofer
-```
-
-Siendo D_total la distancia total óptima en km.
-
-#### Ingreso Total
-
-```
-I_total = I_base + I_variable
-
-donde:
-I_base = n_pedidos × p_base
-I_variable = D_total × p_km
-```
-
-#### Margen de Ganancia
-
-```
-M_total = I_total - C_total
-
-Rentabilidad (%) = (M_total / I_total) × 100
-```
-
----
-
-## 7. Restricciones
-
-### R1. Cada Cliente Visitado Exactamente Una Vez
-
-```
-Σ Σ x_ijk = 1    ∀i ∈ C
-k∈V j∈N
-```
-
-**Significado**: Cada pedido debe ser entregado por exactamente un vehículo.
-
-**Implementación**: Implícita en OR-Tools RoutingModel.
-
----
-
-### R2. Conservación de Flujo
-
-```
-Σ x_ijk = Σ x_jik    ∀j ∈ N, ∀k ∈ V
-i∈N       i∈N
-```
-
-**Significado**: Si un vehículo llega a un nodo, debe salir de ese nodo (conservación de flujo).
-
-**Implementación**: Implícita en OR-Tools RoutingModel.
-
----
-
-### R3. Restricción de Capacidad
-
-```
-Σ q_i × y_ik ≤ Q_k    ∀k ∈ V
-i∈C
-```
-
-**Significado**: La suma de las demandas de los clientes atendidos por el vehículo k no puede exceder su capacidad.
-
-**Implementación en código**:
+**Configuración** (`app_vrp.py`, líneas 519-526):
 ```python
-# app_vrp.py, líneas 254-260
-routing.AddDimensionWithVehicleCapacity(
-    demand_callback_index,
-    0,  # null capacity slack (sin holgura)
-    data['vehicle_capacities'],  # [Q_1, Q_2, ..., Q_K]
-    True,  # start cumul to zero
-    'Capacity'
+precio_base_por_pedido = st.number_input(
+    "Precio Base ($/pedido)",
+    min_value=0.0,
+    value=2000.0,  # default
+    step=100.0,
+    format="%.2f"
 )
 ```
+- **Rango**: ≥ 0
+- **Por defecto**: $2,000.00/pedido
+- **Incremento**: $100
 
 ---
 
-### R4. Cada Vehículo Sale del Depósito
+**p<sub>km</sub>**: Precio variable por kilómetro ($/km)
 
-```
-Σ x_0jk ≤ 1    ∀k ∈ V
-j∈C
-```
-
-**Significado**: Cada vehículo puede salir del depósito como máximo una vez (puede no usarse).
-
-**Implementación**: Implícita en OR-Tools al definir el depot.
-
----
-
-### R5. Cada Vehículo Regresa al Depósito
-
-```
-Σ x_i0k ≤ 1    ∀k ∈ V
-i∈C
-```
-
-**Significado**: Si un vehículo sale del depósito, debe regresar al depósito.
-
-**Implementación**: Implícita en OR-Tools.
-
----
-
-### R6. Consistencia de Salida y Regreso
-
-```
-Σ x_0jk = Σ x_i0k    ∀k ∈ V
-j∈C       i∈C
-```
-
-**Significado**: Un vehículo solo puede regresar si salió del depósito.
-
-**Implementación**: Implícita en OR-Tools.
-
----
-
-### R7. Restricción de Validación de Pedidos
-
-```
-Σ q_i ≤ Σ Q_k
-i∈C     k∈V
-```
-
-**Significado**: La demanda total no puede exceder la capacidad total de la flota.
-
-**Implementación en código**:
+**Configuración** (`app_vrp.py`, líneas 528-535):
 ```python
-# app_vrp.py, líneas 622-626
-total_capacity = num_vehicles * vehicle_capacity
-if len(orders) > total_capacity:
-    st.error(f"Total de pedidos ({len(orders)}) excede la capacidad total ({total_capacity})")
-    st.stop()
+precio_por_km = st.number_input(
+    "Precio por km ($/km)",
+    min_value=0.0,
+    value=150.0,  # default
+    step=10.0,
+    format="%.2f"
+)
 ```
+- **Rango**: ≥ 0
+- **Por defecto**: $150.00/km
+- **Incremento**: $10
 
 ---
 
-### R8. Validación de Coordenadas
+### 4.5 Parámetros de Optimización
 
-```
--90 ≤ lat_i ≤ 90    ∀i ∈ N
--180 ≤ lon_i ≤ 180  ∀i ∈ N
-```
+**t<sub>max</sub>**: Tiempo límite de búsqueda (segundos)
 
-**Implementación en código**:
+**Implementación** (`app_vrp.py`, línea 270):
 ```python
-# app_vrp.py, líneas 568-571
-if not df_pedidos['lat'].between(-90, 90).all():
-    st.error("Latitudes fuera de rango (-90, 90)")
-elif not df_pedidos['lon'].between(-180, 180).all():
-    st.error("Longitudes fuera de rango (-180, 180)")
+search_parameters.time_limit.seconds = 30
 ```
+- **Valor fijo**: 30 segundos
+- **Nota**: No configurable desde la UI
 
----
-
-## 8. Formulación Matemática Completa
-
-### Modelo CVRP Completo
-
-```
-Minimizar:
-    Z = Σ Σ Σ d_ij × x_ijk
-        k∈V i∈N j∈N
-
-Sujeto a:
-
-(1) Visita única:
-    Σ Σ x_ijk = 1                           ∀i ∈ C
-    k∈V j∈N
-
-(2) Conservación de flujo:
-    Σ x_ijk = Σ x_jik                       ∀j ∈ N, ∀k ∈ V
-    i∈N       i∈N
-
-(3) Capacidad del vehículo:
-    Σ q_i × y_ik ≤ Q_k                      ∀k ∈ V
-    i∈C
-
-(4) Salida del depósito:
-    Σ x_0jk ≤ 1                             ∀k ∈ V
-    j∈C
-
-(5) Regreso al depósito:
-    Σ x_i0k ≤ 1                             ∀k ∈ V
-    i∈C
-
-(6) Consistencia de ruta:
-    Σ x_0jk = Σ x_i0k                       ∀k ∈ V
-    j∈C       i∈C
-
-(7) Relación entre x e y:
-    y_ik = Σ x_ijk                          ∀i ∈ C, ∀k ∈ V
-           j∈N
-
-(8) Variables binarias:
-    x_ijk ∈ {0, 1}                          ∀i,j ∈ N, ∀k ∈ V
-    y_ik ∈ {0, 1}                           ∀i ∈ C, ∀k ∈ V
-
-(9) Variables no negativas:
-    u_ik ≥ 0                                ∀i ∈ N, ∀k ∈ V
-```
-
-### Modelo TSP Simple (Caso K=1, sin restricción de capacidad)
-
-```
-Minimizar:
-    Z = Σ Σ d_ij × x_ij
-        i∈N j∈N
-
-Sujeto a:
-
-(1) Cada nodo visitado una vez:
-    Σ x_ij = 1                              ∀j ∈ N, j ≠ 0
-    i∈N
-
-(2) Salida de cada nodo:
-    Σ x_ij = 1                              ∀i ∈ N, i ≠ 0
-    j∈N
-
-(3) Inicio y fin en depot:
-    El nodo 0 es el depot (inicio y fin)
-
-(4) Variables binarias:
-    x_ij ∈ {0, 1}                           ∀i,j ∈ N
-```
-
----
-
-## 9. Parámetros Económicos
-
-### Modelo de Costos
-
-#### Costo de Nafta
-
-```
-Costo_nafta_por_km = p_nafta / r_vehiculo    ($/km)
-
-Costo_total_nafta = Costo_nafta_por_km × D_total    ($)
-```
-
-**Ejemplo**:
-- p_nafta = $1,000/L
-- r_vehiculo = 10 km/L
-- D_total = 45.23 km
-- Costo_nafta_por_km = $100/km
-- Costo_total_nafta = $4,523
-
-#### Costo de Chofer
-
-```
-T_horas = D_total / v_promedio    (horas)
-
-Costo_total_chofer = c_chofer × T_horas    ($)
-```
-
-**Ejemplo**:
-- D_total = 45.23 km
-- v_promedio = 30 km/h
-- c_chofer = $2,000/h
-- T_horas = 1.51 horas
-- Costo_total_chofer = $3,020
-
-#### Costo Total
-
-```
-C_total = Costo_total_nafta + Costo_total_chofer
-```
-
-**Ejemplo**: C_total = $4,523 + $3,020 = $7,543
-
----
-
-### Modelo de Ingresos
-
-#### Ingreso Base
-
-```
-I_base = n_pedidos × p_base    ($)
-```
-
-**Ejemplo**:
-- n_pedidos = 20
-- p_base = $2,000/pedido
-- I_base = $40,000
-
-#### Ingreso Variable
-
-```
-I_variable = D_total × p_km    ($)
-```
-
-**Ejemplo**:
-- D_total = 45.23 km
-- p_km = $150/km
-- I_variable = $6,784.50
-
-#### Ingreso Total
-
-```
-I_total = I_base + I_variable
-```
-
-**Ejemplo**: I_total = $40,000 + $6,784.50 = $46,784.50
-
----
-
-### Margen de Ganancia
-
-```
-M_total = I_total - C_total
-
-Rentabilidad (%) = (M_total / I_total) × 100
-```
-
-**Ejemplo**:
-- I_total = $46,784.50
-- C_total = $7,543
-- M_total = $39,241.50
-- Rentabilidad = 83.9%
-
----
-
-## 10. Análisis de Sensibilidad
-
-El sistema implementa un análisis completo de sensibilidad económica para determinar los rangos viables de cada parámetro.
-
-### 10.1 Sensibilidad del Precio de Nafta
-
-**Objetivo**: Determinar cuánto puede aumentar el precio de nafta sin generar pérdidas.
-
-#### Punto de Equilibrio (Break-even)
-
-En el punto de equilibrio, el margen es cero:
-
-```
-I_total = C_total
-I_total = C_nafta + C_chofer
-I_total = (p_nafta_BE / r_vehiculo) × D_total + C_chofer
-```
-
-Despejando:
-
-```
-p_nafta_BE = ((I_total - C_chofer) × r_vehiculo) / D_total
-```
-
-#### Aumento Permitido
-
-```
-Δp_nafta = p_nafta_BE - p_nafta_actual
-
-Δp_nafta (%) = (Δp_nafta / p_nafta_actual) × 100
-```
-
-#### Rangos de Viabilidad
-
-```
-Límite inferior: $0/L (no puede ser negativo)
-Límite superior: p_nafta_BE (para no tener pérdidas)
-Rango viable: [0, p_nafta_BE]
-```
-
-**Implementación**: `analisis_sensibilidad.py`, líneas 182-225
-
----
-
-### 10.2 Sensibilidad del Costo del Chofer
-
-**Objetivo**: Determinar cuánto puede aumentar el costo del chofer sin generar pérdidas.
-
-#### Punto de Equilibrio
-
-```
-I_total = C_nafta + C_chofer
-I_total = C_nafta + (c_chofer_BE × T_horas)
-
-c_chofer_BE = (I_total - C_nafta) / T_horas
-```
-
-#### Aumento Permitido
-
-```
-Δc_chofer = c_chofer_BE - c_chofer_actual
-
-Δc_chofer (%) = (Δc_chofer / c_chofer_actual) × 100
-```
-
-#### Rangos de Viabilidad
-
-```
-Límite inferior: $0/h
-Límite superior: c_chofer_BE
-Rango viable: [0, c_chofer_BE]
-```
-
-**Implementación**: `analisis_sensibilidad.py`, líneas 317-362
-
----
-
-### 10.3 Sensibilidad del Precio Base por Pedido
-
-**Objetivo**: Determinar el precio base mínimo para no tener pérdidas.
-
-#### Punto de Equilibrio
-
-```
-I_total = C_total
-(p_base_BE × n_pedidos) + (p_km × D_total) = C_total
-
-p_base_BE = (C_total - (p_km × D_total)) / n_pedidos
-```
-
-#### Margen Disponible
-
-```
-Δp_base = p_base_actual - p_base_BE
-
-Δp_base (%) = (Δp_base / p_base_actual) × 100
-```
-
-#### Rangos de Viabilidad
-
-```
-Límite inferior: p_base_BE (mínimo para no perder)
-Límite superior: ∞ (sin límite)
-Rango viable: [p_base_BE, ∞)
-```
-
-**Implementación**: `analisis_sensibilidad.py`, líneas 227-270
-
----
-
-### 10.4 Sensibilidad del Precio por Kilómetro
-
-**Objetivo**: Determinar el precio por km mínimo para no tener pérdidas.
-
-#### Punto de Equilibrio
-
-```
-I_total = C_total
-(p_base × n_pedidos) + (p_km_BE × D_total) = C_total
-
-p_km_BE = (C_total - (p_base × n_pedidos)) / D_total
-```
-
-#### Margen Disponible
-
-```
-Δp_km = p_km_actual - p_km_BE
-
-Δp_km (%) = (Δp_km / p_km_actual) × 100
-```
-
-#### Rangos de Viabilidad
-
-```
-Límite inferior: p_km_BE (mínimo para no perder)
-Límite superior: ∞ (sin límite)
-Rango viable: [p_km_BE, ∞)
-```
-
-**Implementación**: `analisis_sensibilidad.py`, líneas 272-315
-
----
-
-### 10.5 Tabla de Sensibilidad Estilo LINGO
-
-El sistema genera una tabla con formato similar a LINGO que resume todos los análisis:
-
-| Variable | Valor Actual | Costo/Ingreso Parcial | Precio Mínimo | Precio Máximo | Margen de Variación |
-|----------|--------------|----------------------|---------------|---------------|---------------------|
-| Precio Nafta ($/L) | $1,000.00 | Costo: $4,523.00 | $0.00 | $9,385.67 | +$8,385.67 (+838.6%) |
-| Costo Chofer ($/h) | $2,000.00 | Costo: $3,020.00 | $0.00 | $27,987.42 | +$25,987.42 (+1,299.4%) |
-| Precio Base ($/pedido) | $2,000.00 | Ingreso: $40,000.00 | $38.65 | ∞ | -$1,961.35 (-98.1%) |
-| Precio por km ($/km) | $150.00 | Ingreso: $6,784.50 | -$716.89 | ∞ | -$866.89 (-577.9%) |
-
-**Interpretación de la tabla**:
-- **Margen positivo en Precio Nafta**: Puede aumentar hasta $9,385.67/L sin pérdidas
-- **Margen positivo en Costo Chofer**: Puede aumentar hasta $27,987.42/h sin pérdidas
-- **Margen negativo en Precio Base**: Puede bajar hasta $38.65/pedido sin pérdidas
-- **Margen negativo en Precio por km**: Puede bajar incluso a valores negativos (descuentos)
-
-**Implementación**: `analisis_sensibilidad.py`, líneas 381-434
-
----
-
-## 11. Método de Solución
-
-### Algoritmo: Google OR-Tools
-
-El proyecto utiliza **Google OR-Tools**, una biblioteca de optimización de código abierto que implementa algoritmos avanzados para problemas de ruteo.
-
-### Biblioteca Utilizada
-
-```python
-from ortools.constraint_solver import routing_enums_pb2
-from ortools.constraint_solver import pywrapcp
-```
-
-**Versión**: ≥ 9.7.0 (según `requirements.txt`)
-
----
-
-### Estrategia de Solución Inicial
-
+**Estrategia inicial**: PATH_CHEAPEST_ARC
 ```python
 # app_vrp.py, líneas 264-266
 search_parameters.first_solution_strategy = (
@@ -709,22 +332,7 @@ search_parameters.first_solution_strategy = (
 )
 ```
 
-**PATH_CHEAPEST_ARC**:
-- Construye una solución inicial agregando iterativamente el arco más barato disponible
-- Rápida construcción de una solución factible inicial
-- Buena calidad inicial para la fase de mejora
-
-**Alternativas disponibles en OR-Tools**:
-- AUTOMATIC
-- SAVINGS
-- SWEEP
-- CHRISTOFIDES
-- FIRST_UNBOUND_MIN_VALUE
-
----
-
-### Metaheurística de Mejora
-
+**Metaheurística**: GUIDED_LOCAL_SEARCH
 ```python
 # app_vrp.py, líneas 267-269
 search_parameters.local_search_metaheuristic = (
@@ -732,66 +340,72 @@ search_parameters.local_search_metaheuristic = (
 )
 ```
 
-**GUIDED_LOCAL_SEARCH (GLS)**:
-- Metaheurística que modifica la función objetivo para escapar de óptimos locales
-- Penaliza características de soluciones visitadas frecuentemente
-- Balance entre intensificación y diversificación
-- Especialmente efectiva para VRP
+---
 
-#### Funcionamiento de GLS
+### 4.6 Validaciones de Entrada
 
-1. **Fase de búsqueda local**: Mejora la solución actual con movimientos locales
-2. **Detección de óptimo local**: Si no hay mejora posible
-3. **Penalización**: Aumenta el costo de arcos frecuentemente usados
-4. **Nueva búsqueda**: Explora regiones diferentes del espacio de soluciones
-5. **Repetición**: Vuelve al paso 1 hasta alcanzar el tiempo límite
+#### Validación de Coordenadas
 
-**Alternativas disponibles**:
-- AUTOMATIC
-- GREEDY_DESCENT
-- SIMULATED_ANNEALING
-- TABU_SEARCH
-- GENERIC_TABU_SEARCH
+**Latitud** (`app_vrp.py`, líneas 568-569):
+```
+-90° ≤ lat<sub>i</sub> ≤ 90°  ∀i ∈ N
+```
+
+**Longitud** (`app_vrp.py`, líneas 570-571):
+```
+-180° ≤ lon<sub>i</sub> ≤ 180°  ∀i ∈ N
+```
+
+#### Validación de Capacidad Total
+
+**Implementación** (`app_vrp.py`, líneas 622-626):
+```python
+total_capacity = num_vehicles * vehicle_capacity
+if len(orders) > total_capacity:
+    st.error(f"Total de pedidos ({len(orders)}) excede la capacidad total ({total_capacity})")
+    st.stop()
+```
+
+**Restricción**:
+```
+Σ q<sub>i</sub> ≤ Σ Q<sub>k</sub>
+i∈C     k∈V
+```
+
+Es decir: La demanda total no puede exceder la capacidad total de la flota.
 
 ---
 
-### Límite de Tiempo
+## 5. Variables de Decisión
 
-```python
-# app_vrp.py, línea 270
-search_parameters.time_limit.seconds = 30
-```
+### Variables Binarias Implícitas
 
-- **Por defecto**: 30 segundos
-- Configurable mediante parámetro `tiempo_limite_segundos`
-- Balance entre calidad de solución y tiempo de ejecución
+OR-Tools maneja las variables de decisión internamente. Conceptualmente, el modelo utiliza:
+
+**x<sub>ijk</sub>** ∈ {0, 1} para todo i, j ∈ N, k ∈ V
+
+Donde:
+- x<sub>ijk</sub> = 1 si el vehículo k viaja directamente del nodo i al nodo j
+- x<sub>ijk</sub> = 0 en caso contrario
+
+### Variables Auxiliares (implícitas)
+
+**y<sub>ik</sub>** ∈ {0, 1} para todo i ∈ C, k ∈ V
+- y<sub>ik</sub> = 1 si el cliente i es atendido por el vehículo k
+- y<sub>ik</sub> = 0 en caso contrario
+
+**u<sub>ik</sub>** ≥ 0 para todo i ∈ N, k ∈ V
+- u<sub>ik</sub> = carga acumulada del vehículo k al llegar al nodo i
+- Usada para verificar restricción de capacidad
 
 ---
 
-### Estructura del Modelo en OR-Tools
+## 6. Función Objetivo
 
-#### 1. Creación del Manager
+### Minimizar Distancia Total
 
+**Implementación** (`app_vrp.py`, líneas 237-244):
 ```python
-# app_vrp.py, líneas 230-234
-manager = pywrapcp.RoutingIndexManager(
-    len(data['distance_matrix']),  # número de nodos
-    data['num_vehicles'],           # número de vehículos
-    data['depot']                   # índice del depósito
-)
-```
-
-#### 2. Creación del Routing Model
-
-```python
-# app_vrp.py, línea 235
-routing = pywrapcp.RoutingModel(manager)
-```
-
-#### 3. Registro de la Callback de Distancia
-
-```python
-# app_vrp.py, líneas 237-243
 def distance_callback(from_index, to_index):
     from_node = manager.IndexToNode(from_index)
     to_node = manager.IndexToNode(to_index)
@@ -801,82 +415,423 @@ transit_callback_index = routing.RegisterTransitCallback(distance_callback)
 routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
 ```
 
-#### 4. Registro de la Callback de Demanda
+**Formulación matemática**:
+```
+Minimizar Z = Σ   Σ   Σ   d<sub>ij</sub> × x<sub>ijk</sub>
+              k∈V i∈N j∈N
+```
 
+**Significado**: Minimizar la suma de las distancias de todos los arcos recorridos por todos los vehículos.
+
+### Extracción del Valor Óptimo
+
+**Implementación** (`app_vrp.py`, líneas 281-294):
 ```python
-# app_vrp.py, líneas 246-251
+for vehicle_id in range(data['num_vehicles']):
+    index = routing.Start(vehicle_id)
+    route_distance = 0
+
+    while not routing.IsEnd(index):
+        previous_index = index
+        index = solution.Value(routing.NextVar(index))
+        route_distance += routing.GetArcCostForVehicle(previous_index, index, vehicle_id)
+```
+
+**Conversión a kilómetros** (`app_vrp.py`, línea 772):
+```python
+total_distance = sum(r['distance'] for r in all_routes)  # en metros
+distancia_total_km = total_distance / 1000  # convertir a km
+```
+
+---
+
+## 7. Restricciones
+
+### R1. Restricción de Capacidad
+
+**Implementación** (`app_vrp.py`, líneas 246-260):
+```python
 def demand_callback(from_index):
     from_node = manager.IndexToNode(from_index)
     return data['demands'][from_node]
 
 demand_callback_index = routing.RegisterUnaryTransitCallback(demand_callback)
-```
 
-#### 5. Agregado de Dimensión de Capacidad
-
-```python
-# app_vrp.py, líneas 254-260
 routing.AddDimensionWithVehicleCapacity(
     demand_callback_index,
     0,  # null capacity slack (sin holgura)
-    data['vehicle_capacities'],  # capacidad de cada vehículo
-    True,  # start cumul to zero (la carga inicial es 0)
+    data['vehicle_capacities'],  # [Q_1, Q_2, ..., Q_K]
+    True,  # start cumul to zero (carga inicial = 0)
     'Capacity'  # nombre de la dimensión
 )
 ```
 
-#### 6. Resolución
-
-```python
-# app_vrp.py, línea 273
-solution = routing.SolveWithParameters(search_parameters)
+**Formulación matemática**:
+```
+Σ q<sub>i</sub> × y<sub>ik</sub> ≤ Q<sub>k</sub>    ∀k ∈ V
+i∈C
 ```
 
-#### 7. Extracción de Rutas
+**Significado**: La suma de las demandas de los clientes atendidos por el vehículo k no puede exceder su capacidad.
 
+**Parámetros en el código**:
+- `null capacity slack = 0`: No hay holgura, la capacidad es estricta
+- `start cumul to zero = True`: Cada vehículo inicia con carga 0 en el depósito
+
+---
+
+### R2. Cada Cliente Visitado Exactamente Una Vez
+
+**Formulación matemática**:
+```
+Σ   Σ   x<sub>ijk</sub> = 1    ∀i ∈ C
+k∈V j∈N
+```
+
+**Implementación**: Implícita en OR-Tools RoutingModel. El solver garantiza automáticamente que cada nodo (excepto el depot) sea visitado exactamente una vez.
+
+---
+
+### R3. Conservación de Flujo
+
+**Formulación matemática**:
+```
+Σ   x<sub>ijk</sub> = Σ   x<sub>jik</sub>    ∀j ∈ N, ∀k ∈ V
+i∈N         i∈N
+```
+
+**Significado**: Si un vehículo llega a un nodo, debe salir de ese nodo (conservación de flujo).
+
+**Implementación**: Implícita en OR-Tools RoutingModel.
+
+---
+
+### R4. Cada Vehículo Sale del Depósito (máximo una vez)
+
+**Formulación matemática**:
+```
+Σ   x<sub>0jk</sub> ≤ 1    ∀k ∈ V
+j∈C
+```
+
+**Implementación**: Implícita al definir el depot en el manager (`app_vrp.py`, líneas 230-234):
 ```python
-# app_vrp.py, líneas 279-306
-for vehicle_id in range(data['num_vehicles']):
-    index = routing.Start(vehicle_id)
-    route_distance = 0
-    route_load = 0
-    route_nodes = []
+manager = pywrapcp.RoutingIndexManager(
+    len(data['distance_matrix']),
+    data['num_vehicles'],
+    data['depot']  # índice 0 es el depósito
+)
+```
 
-    while not routing.IsEnd(index):
-        node_index = manager.IndexToNode(index)
-        route_load += data['demands'][node_index]
-        route_nodes.append(node_index)
+---
 
-        previous_index = index
-        index = solution.Value(routing.NextVar(index))
-        route_distance += routing.GetArcCostForVehicle(previous_index, index, vehicle_id)
+### R5. Cada Vehículo Regresa al Depósito
 
-    # Agregar regreso al depósito
-    node_index = manager.IndexToNode(index)
-    route_nodes.append(node_index)
+**Formulación matemática**:
+```
+Σ   x<sub>i0k</sub> ≤ 1    ∀k ∈ V
+i∈C
+```
 
-    all_routes.append({
-        'vehicle': vehicle_id + 1,
-        'distance': route_distance,
-        'packages': route_load,
-        'nodes': route_nodes
-    })
+**Implementación**: Implícita en OR-Tools. Si un vehículo sale, debe regresar.
+
+**Extracción en el código** (`app_vrp.py`, líneas 296-298):
+```python
+# Agregar regreso al depósito
+node_index = manager.IndexToNode(index)
+route_nodes.append(node_index)  # último nodo es depot (0)
+```
+
+---
+
+### R6. Consistencia de Salida y Regreso
+
+**Formulación matemática**:
+```
+Σ   x<sub>0jk</sub> = Σ   x<sub>i0k</sub>    ∀k ∈ V
+j∈C         i∈C
+```
+
+**Significado**: Un vehículo solo puede regresar si salió del depósito.
+
+**Implementación**: Implícita en OR-Tools.
+
+---
+
+### R7. Validación de Capacidad Total Previa
+
+**Implementación** (`app_vrp.py`, líneas 622-626):
+```python
+total_capacity = num_vehicles * vehicle_capacity
+if len(orders) > total_capacity:
+    st.error(f"Total de pedidos ({len(orders)}) excede la capacidad total ({total_capacity})")
+    st.stop()
+```
+
+**Formulación matemática**:
+```
+Σ   q<sub>i</sub> ≤ Σ   Q<sub>k</sub>
+i∈C     k∈V
+```
+
+**Nota**: Esta validación ocurre ANTES de la optimización para evitar problemas infactibles.
+
+---
+
+### R8. Validación de Coordenadas
+
+**Implementación** (`app_vrp.py`, líneas 568-571):
+```python
+if not df_pedidos['lat'].between(-90, 90).all():
+    st.error("Latitudes fuera de rango (-90, 90)")
+elif not df_pedidos['lon'].between(-180, 180).all():
+    st.error("Longitudes fuera de rango (-180, 180)")
+```
+
+**Formulación matemática**:
+```
+-90 ≤ lat<sub>i</sub> ≤ 90    ∀i ∈ N
+-180 ≤ lon<sub>i</sub> ≤ 180  ∀i ∈ N
+```
+
+---
+
+## 8. Formulación Matemática Completa
+
+### Modelo CVRP Implementado
+
+```
+Minimizar:
+    Z = Σ   Σ   Σ   d<sub>ij</sub> × x<sub>ijk</sub>
+        k∈V i∈N j∈N
+
+Sujeto a:
+
+(1) Visita única (implícita en OR-Tools):
+    Σ   Σ   x<sub>ijk</sub> = 1                           ∀i ∈ C
+    k∈V j∈N
+
+(2) Conservación de flujo (implícita en OR-Tools):
+    Σ   x<sub>ijk</sub> = Σ   x<sub>jik</sub>                       ∀j ∈ N, ∀k ∈ V
+    i∈N         i∈N
+
+(3) Capacidad del vehículo (implementada con AddDimensionWithVehicleCapacity):
+    Σ   q<sub>i</sub> × y<sub>ik</sub> ≤ Q<sub>k</sub>                      ∀k ∈ V
+    i∈C
+
+(4) Salida del depósito (implícita al definir depot):
+    Σ   x<sub>0jk</sub> ≤ 1                             ∀k ∈ V
+    j∈C
+
+(5) Regreso al depósito (implícita en OR-Tools):
+    Σ   x<sub>i0k</sub> ≤ 1                             ∀k ∈ V
+    i∈C
+
+(6) Consistencia de ruta (implícita en OR-Tools):
+    Σ   x<sub>0jk</sub> = Σ   x<sub>i0k</sub>                       ∀k ∈ V
+    j∈C         i∈C
+
+(7) Relación entre x e y:
+    y<sub>ik</sub> = Σ   x<sub>ijk</sub>                          ∀i ∈ C, ∀k ∈ V
+           j∈N
+
+(8) Variables binarias:
+    x<sub>ijk</sub> ∈ {0, 1}                          ∀i,j ∈ N, ∀k ∈ V
+    y<sub>ik</sub> ∈ {0, 1}                           ∀i ∈ C, ∀k ∈ V
+
+(9) Variables no negativas:
+    u<sub>ik</sub> ≥ 0                                ∀i ∈ N, ∀k ∈ V
+
+(10) Validación previa de capacidad:
+    Σ   q<sub>i</sub> ≤ Σ   Q<sub>k</sub>
+    i∈C     k∈V
+
+(11) Validación de coordenadas:
+    -90 ≤ lat<sub>i</sub> ≤ 90                        ∀i ∈ N
+    -180 ≤ lon<sub>i</sub> ≤ 180                      ∀i ∈ N
+```
+
+### Valores del Problema
+
+Con la configuración por defecto:
+- **N**: Variable (depende del número de pedidos ingresados)
+- **K**: 3 vehículos
+- **Q<sub>k</sub>**: 15 paquetes por vehículo
+- **q<sub>i</sub>**: 1 paquete por pedido
+- **d<sub>ij</sub>**: Calculado por OSRM (distancias reales en metros)
+
+---
+
+## 9. Método de Solución
+
+### Herramienta: Google OR-Tools
+
+**Biblioteca utilizada** (`app_vrp.py`, líneas 16-17):
+```python
+from ortools.constraint_solver import routing_enums_pb2
+from ortools.constraint_solver import pywrapcp
+```
+
+**Versión requerida**: `ortools>=9.7.0`
+
+---
+
+### Tipo de Solver
+
+OR-Tools **NO es un solver de Programación Lineal** (no usa Simplex). Es un solver de **Constraint Programming + Metaheurísticas** especializado en problemas combinatorios.
+
+**Características**:
+- ✅ Diseñado específicamente para VRP y problemas de ruteo
+- ✅ Maneja eficientemente problemas NP-Hard
+- ✅ Encuentra soluciones de alta calidad en tiempo razonable
+- ❌ NO garantiza optimalidad global
+- ❌ NO proporciona precios sombra ni costos reducidos
+
+---
+
+### Estrategia de Solución Inicial
+
+**PATH_CHEAPEST_ARC** (`app_vrp.py`, líneas 264-266):
+```python
+search_parameters.first_solution_strategy = (
+    routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+)
+```
+
+**Funcionamiento**:
+1. Inicia con todas las rutas vacías
+2. Iterativamente agrega el arco más barato disponible
+3. Respeta restricciones de capacidad y visita única
+4. Construye una solución inicial factible de buena calidad
+
+**Tiempo típico**: 1-3 segundos
+
+---
+
+### Metaheurística de Mejora
+
+**GUIDED_LOCAL_SEARCH (GLS)** (`app_vrp.py`, líneas 267-269):
+```python
+search_parameters.local_search_metaheuristic = (
+    routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+)
+```
+
+**Funcionamiento de GLS**:
+
+```
+1. Búsqueda local: Mejora la solución actual con movimientos locales
+   ↓
+2. Detección de óptimo local: No hay mejora posible
+   ↓
+3. Penalización: Aumenta el costo de arcos usados frecuentemente
+   ↓
+4. Nueva búsqueda: Explora regiones diferentes del espacio
+   ↓
+5. Repetición: Vuelve al paso 1 hasta alcanzar tiempo límite
+```
+
+**Ventajas**:
+- Escapa de óptimos locales mediante penalizaciones adaptativas
+- Balance entre intensificación (explotar soluciones buenas) y diversificación (explorar regiones nuevas)
+- Especialmente efectiva para VRP
+
+**Calidad típica**: 90-98% del óptimo global
+
+---
+
+### Límite de Tiempo
+
+**Configuración** (`app_vrp.py`, línea 270):
+```python
+search_parameters.time_limit.seconds = 30
+```
+
+**Valor fijo**: 30 segundos
+
+**Comportamiento al alcanzar el límite**:
+
+```
+t = 0s    → Solución inicial (PATH_CHEAPEST_ARC)
+t = 1-3s  → Primera solución construida
+t = 3-25s → Mejoras iterativas (GUIDED_LOCAL_SEARCH)
+t = 30s   ⏰ LÍMITE ALCANZADO
+          ↓
+          Retorna la MEJOR solución encontrada hasta el momento
+```
+
+**Importante**:
+- ✅ Siempre retorna una solución válida (si existe)
+- ✅ La solución cumple todas las restricciones
+- ✅ La solución es de buena calidad (90-98% del óptimo)
+- ❌ NO garantiza que sea la óptima global
+- ❌ El solver NO retorna `None` por límite de tiempo
+- ❌ Solo retorna `None` si NO existe solución factible
+
+**Verificación** (`app_vrp.py`, líneas 275-276):
+```python
+if not solution:
+    return None, None, None, None, None
+```
+
+Esto ocurre solo si:
+- La capacidad total es insuficiente (aunque hay validación previa)
+- El problema está mal formulado
+- No existe solución factible
+
+---
+
+### Proceso de Optimización Completo
+
+**Implementación** (`app_vrp.py`, líneas 207-307):
+
+```
+1. Preparación de datos (líneas 221-227)
+   ├─ Convertir matriz de distancias a lista
+   ├─ Definir demandas: [0, 1, 1, ..., 1]
+   ├─ Definir capacidades: [Q, Q, ..., Q]
+   └─ Definir depot: 0
+
+2. Creación del manager (líneas 230-234)
+   └─ Mapeo entre índices internos y nodos reales
+
+3. Creación del modelo (línea 235)
+   └─ Instancia del RoutingModel
+
+4. Registro de callback de distancia (líneas 237-244)
+   └─ Define cómo calcular el costo de cada arco
+
+5. Registro de callback de demanda (líneas 246-251)
+   └─ Define la demanda de cada nodo
+
+6. Agregar dimensión de capacidad (líneas 254-260)
+   └─ Implementa la restricción de capacidad
+
+7. Configurar parámetros de búsqueda (líneas 263-270)
+   ├─ Estrategia inicial: PATH_CHEAPEST_ARC
+   ├─ Metaheurística: GUIDED_LOCAL_SEARCH
+   └─ Tiempo límite: 30 segundos
+
+8. Resolver (línea 273)
+   └─ Ejecuta la optimización
+
+9. Extraer rutas (líneas 278-306)
+   ├─ Para cada vehículo:
+   │  ├─ Seguir la secuencia de nodos
+   │  ├─ Acumular distancia recorrida
+   │  ├─ Acumular paquetes transportados
+   │  └─ Registrar nodos visitados
+   └─ Retornar todas las rutas
 ```
 
 ---
 
 ### Cálculo de Matriz de Distancias
 
-#### Fuente Principal: OSRM API
+#### Método Principal: OSRM API
 
-**OSRM (Open Source Routing Machine)**:
-- Utiliza datos reales de OpenStreetMap
-- Calcula distancias en red vial real (calles, avenidas)
-- Considera sentidos de circulación y restricciones de tránsito
-- API pública: `http://router.project-osrm.org`
-
+**Implementación** (`app_vrp.py`, líneas 145-157):
 ```python
-# app_vrp.py, líneas 145-167
 coords = ";".join([f"{loc['lon']},{loc['lat']}" for loc in locations])
 url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=distance"
 
@@ -884,34 +839,56 @@ response = requests.get(url, timeout=30)
 data = response.json()
 
 if data['code'] == 'Ok':
-    distance_matrix = np.array(data['distances'])
+    distance_matrix = np.array(data['distances'])  # matriz en metros
 ```
 
-**Ventajas de OSRM**:
-- Distancias realistas para contexto urbano
-- Considera la red vial real de CABA
-- Gratuito y sin límite de consultas
+**Características de OSRM**:
+- Utiliza datos de OpenStreetMap
+- Calcula distancias en red vial real (calles y avenidas)
+- Considera sentidos de circulación
+- Retorna matriz NxN en metros
+- API pública gratuita: `http://router.project-osrm.org`
 
-#### Fallback: Distancia Euclidiana
+**Formato de la solicitud**:
+```
+http://router.project-osrm.org/table/v1/driving/
+    lon1,lat1;lon2,lat2;lon3,lat3;...
+    ?annotations=distance
+```
 
-Si OSRM falla, se usa distancia euclidiana ajustada:
+---
 
+#### Método Fallback: Distancia Euclidiana
+
+**Implementación** (`app_vrp.py`, líneas 114-117):
 ```python
-# app_vrp.py, líneas 105-119
-distance_matrix[i][j] = sqrt(
-    ((lat2 - lat1) × 111,000)² +
-    ((lon2 - lon1) × 111,000 × cos(lat1))²
+distance_matrix[i][j] = np.sqrt(
+    ((lat2 - lat1) * 111000)**2 +
+    ((lon2 - lon1) * 111000 * np.cos(np.radians(lat1)))**2
 )
 ```
 
+**Fórmula matemática**:
+```
+d<sub>ij</sub> = √[(Δlat × 111000)² + (Δlon × 111000 × cos(lat<sub>i</sub>))²]
+
+donde:
+Δlat = lat<sub>j</sub> - lat<sub>i</sub>
+Δlon = lon<sub>j</sub> - lon<sub>i</sub>
+```
+
 **Factores de conversión**:
-- 1° de latitud ≈ 111,000 metros
-- 1° de longitud ≈ 111,000 × cos(latitud) metros
+- **1° de latitud** ≈ 111,000 metros (constante)
+- **1° de longitud** ≈ 111,000 × cos(latitud) metros (varía con la latitud)
+
+**Uso**: Solo se activa si OSRM falla o no está disponible.
+
+---
 
 #### Sistema de Cache
 
+**Implementación** (`app_vrp.py`, líneas 136-143):
 ```python
-# app_vrp.py, líneas 136-143
 cache_file = f'vrp_streamlit_{n}.npz'
 
 if use_cache:
@@ -920,319 +897,818 @@ if use_cache:
         return cache['distance']
     except:
         pass
+
+# ... calcular matriz ...
+
+if use_cache:
+    np.savez(cache_file, distance=distance_matrix)
 ```
 
-**Beneficios del cache**:
-- Reduce llamadas a OSRM API
-- Acelera ejecuciones repetidas
-- Formato `.npz` (NumPy compressed)
+**Beneficios**:
+- Evita recalcular matrices costosas
+- Acelera ejecuciones repetidas con mismo número de puntos
+- Formato `.npz` (NumPy compressed) eficiente
+
+**Nombre de archivo**: `vrp_streamlit_{n}.npz` donde n = número de ubicaciones
 
 ---
 
 ### Visualización de Rutas
 
-#### Geometría de Rutas Reales (OSRM)
+**Biblioteca**: Folium (mapas interactivos basados en Leaflet.js)
 
-Para la visualización, se obtiene la geometría detallada de cada ruta:
+**Implementación** (`app_vrp.py`, líneas 313-416):
 
+1. **Obtener geometría real de OSRM** (líneas 168-201):
+   ```python
+   url = f"http://router.project-osrm.org/route/v1/driving/{coords}?overview=full&geometries=polyline"
+   encoded_polyline = data['routes'][0]['geometry']
+   decoded = polyline.decode(encoded_polyline)  # lista de (lat, lon)
+   ```
+
+2. **Crear mapa base** (líneas 332-336):
+   - Centro: coordenadas del depósito
+   - Zoom: 12
+   - Tiles: OpenStreetMap
+
+3. **Agregar elementos**:
+   - Polígonos de barrios de CABA (fondo gris semitransparente)
+   - Marcador del depósito (rojo, icono de casa)
+   - Rutas de vehículos (líneas de colores sobre calles reales)
+   - Puntos de entrega (círculos de colores)
+   - Popups interactivos con información
+
+**Colores de vehículos** (línea 339):
 ```python
-# app_vrp.py, líneas 168-201
-coords = ";".join([f"{all_locations[i]['lon']},{all_locations[i]['lat']}"
-                  for i in locations_indices])
-
-url = f"http://router.project-osrm.org/route/v1/driving/{coords}?overview=full&geometries=polyline"
-
-response = requests.get(url, timeout=10)
-data = response.json()
-
-if data['code'] == 'Ok':
-    encoded_polyline = data['routes'][0]['geometry']
-    decoded = polyline.decode(encoded_polyline)  # Lista de (lat, lon)
-    return decoded
+colors = ['green', 'orange', 'purple', 'brown', 'pink', 'cyan']
 ```
 
-**Polyline**: Formato compacto de Google para codificar secuencias de coordenadas.
+---
 
-#### Biblioteca de Mapas: Folium
+## 10. Análisis Económico Post-Optimización
 
+### ⚠️ NOTA IMPORTANTE - Limitaciones Metodológicas
+
+El análisis presentado **NO es el análisis de sensibilidad clásico de Programación Lineal** (precios sombra, costos reducidos) debido a las siguientes razones:
+
+1. **OR-Tools utiliza metaheurísticas**, no el método Simplex
+2. **No proporciona información dual** (precios sombra de restricciones)
+3. **No calcula costos reducidos** de variables
+4. **No es un solver de LP**, es un solver de Constraint Programming
+
+Este es un **análisis económico de punto de equilibrio (break-even)** calculado manualmente mediante fórmulas algebraicas sobre la solución ya optimizada.
+
+**Asume**:
+- La distancia óptima D* es fija (resultado de la optimización)
+- Los parámetros económicos son externos al modelo de optimización
+- Se analiza viabilidad económica, no sensibilidad del modelo matemático
+
+**Pregunta que responde**:
+> "Dada la solución óptima con distancia D*, ¿qué rangos de precios/costos mantienen la rentabilidad del negocio?"
+
+**Pregunta que NO responde**:
+> "¿Cuál es el valor marginal de aumentar la capacidad de un vehículo en una unidad?" (esto requeriría precios sombra)
+
+---
+
+### 10.1 Metodología del Análisis
+
+**Flujo del análisis** (`app_vrp.py`, líneas 772-854):
+
+```
+1. Optimización con OR-Tools
+   ↓
+   D* = distancia óptima (en km)
+   n = número de pedidos entregados
+
+2. Cálculo de costos (función de D*)
+   ├─ Costo de nafta = (D* / rendimiento) × precio_nafta
+   └─ Costo de chofer = (D* / velocidad) × costo_chofer
+
+3. Cálculo de ingresos (función de D* y n)
+   ├─ Ingreso base = n × precio_base
+   └─ Ingreso variable = D* × precio_por_km
+
+4. Cálculo de margen
+   └─ Margen = Ingresos - Costos
+
+5. Análisis de break-even (para cada parámetro económico)
+   └─ ¿Qué valor hace que Margen = 0?
+```
+
+**Integración con AnalizadorSensibilidad** (`app_vrp.py`, líneas 779-790):
 ```python
-# app_vrp.py, líneas 313-416
-import folium
-from streamlit_folium import st_folium
+analizador = AnalizadorSensibilidad(
+    distancia_total_km=distancia_total_km,  # D* (fijo)
+    num_rutas=len(all_routes),
+    num_pedidos=num_pedidos,  # n (fijo)
+    distancias_por_ruta=distancias_por_ruta,
+    precio_nafta=precio_nafta_sess,
+    rendimiento_vehiculo=rendimiento_sess,
+    precio_base_por_pedido=precio_base_sess,
+    precio_por_km=precio_por_km_sess,
+    costo_chofer_por_hora=costo_chofer_sess,
+    velocidad_promedio_kmh=velocidad_sess
+)
+```
 
-mapa = folium.Map(
-    location=centro,
-    zoom_start=12,
-    tiles='OpenStreetMap'
+---
+
+### 10.2 Modelo de Costos
+
+#### Costo de Nafta
+
+**Fórmula** (`analisis_sensibilidad.py`, líneas 63-70):
+```
+Costo_nafta_por_km = p_nafta / r_vehiculo    ($/km)
+
+Costo_total_nafta = Costo_nafta_por_km × D*    ($)
+```
+
+**Ejemplo** (con valores por defecto):
+- p_nafta = $1,000/L
+- r_vehiculo = 10 km/L
+- D* = 45.23 km (resultado de optimización)
+- **Costo_nafta_por_km** = $1,000 / 10 = $100/km
+- **Costo_total_nafta** = $100/km × 45.23 km = **$4,523**
+
+---
+
+#### Costo de Chofer
+
+**Fórmula** (`analisis_sensibilidad.py`, líneas 72-79):
+```
+T_horas = D* / v_promedio    (horas)
+
+Costo_total_chofer = c_chofer × T_horas    ($)
+```
+
+**Ejemplo**:
+- D* = 45.23 km
+- v_promedio = 30 km/h
+- c_chofer = $2,000/h
+- **T_horas** = 45.23 / 30 = 1.51 horas
+- **Costo_total_chofer** = $2,000/h × 1.51 h = **$3,020**
+
+---
+
+#### Costo Total
+
+**Fórmula** (`analisis_sensibilidad.py`, líneas 81-103):
+```
+C_total = Costo_total_nafta + Costo_total_chofer
+```
+
+**Ejemplo**: C_total = $4,523 + $3,020 = **$7,543**
+
+**Implementación en UI** (`app_vrp.py`, líneas 800-805):
+```python
+st.metric(
+    "💵 Costo Operativo",
+    f"${costos['costo_total']:,.2f}",
+    help=f"Nafta: ${costos['costo_total_nafta']:,.2f} + "
+         f"Chofer: ${costos['costo_total_chofer']:,.2f} "
+         f"({costos['tiempo_total_horas']:.1f}h)"
+)
+```
+
+---
+
+### 10.3 Modelo de Ingresos
+
+#### Ingreso Base
+
+**Fórmula** (`analisis_sensibilidad.py`, líneas 122-136):
+```
+I_base = n_pedidos × p_base    ($)
+```
+
+**Ejemplo**:
+- n_pedidos = 20
+- p_base = $2,000/pedido
+- **I_base** = 20 × $2,000 = **$40,000**
+
+---
+
+#### Ingreso Variable
+
+**Fórmula**:
+```
+I_variable = D* × p_km    ($)
+```
+
+**Ejemplo**:
+- D* = 45.23 km
+- p_km = $150/km
+- **I_variable** = 45.23 × $150 = **$6,784.50**
+
+---
+
+#### Ingreso Total
+
+**Fórmula**:
+```
+I_total = I_base + I_variable
+```
+
+**Ejemplo**: I_total = $40,000 + $6,784.50 = **$46,784.50**
+
+**Implementación en UI** (`app_vrp.py`, líneas 807-812):
+```python
+st.metric(
+    "💰 Ingreso Total",
+    f"${ingresos['ingreso_total']:,.2f}",
+    help=f"Base: ${ingresos['ingreso_base']:,.2f} + "
+         f"Variable: ${ingresos['ingreso_variable']:,.2f}"
+)
+```
+
+---
+
+### 10.4 Margen de Ganancia
+
+**Fórmula** (`analisis_sensibilidad.py`, líneas 153-180):
+```
+M_total = I_total - C_total
+
+Rentabilidad (%) = (M_total / I_total) × 100
+```
+
+**Ejemplo**:
+- I_total = $46,784.50
+- C_total = $7,543
+- **M_total** = $46,784.50 - $7,543 = **$39,241.50**
+- **Rentabilidad** = ($39,241.50 / $46,784.50) × 100 = **83.9%**
+
+**Implementación en UI** (`app_vrp.py`, líneas 814-829):
+```python
+st.metric(
+    "📊 Margen Neto",
+    f"${margen['margen_total']:,.2f}",
+    delta=f"{margen['rentabilidad_porcentaje']:+.1f}%",
+    delta_color="normal" if margen['margen_total'] >= 0 else "inverse"
 )
 
-# Agregar ruta real
-folium.PolyLine(
-    locations=route_geometry,
-    color=color,
-    weight=3,
-    opacity=0.7,
-    popup=f"Camión {vehicle_id}"
-).add_to(mapa)
-```
-
-**Elementos visualizados**:
-- Polígonos de barrios de CABA (fondo)
-- Depósito (marcador rojo con icono de casa)
-- Rutas de vehículos (líneas de colores siguiendo calles reales)
-- Puntos de entrega (círculos de colores)
-- Información interactiva en popups
-
----
-
-## 12. Archivos de Implementación
-
-### Módulos Principales
-
-#### `app_vrp.py` (961 líneas)
-**Descripción**: Aplicación web Streamlit para la interfaz de usuario.
-
-**Funciones clave**:
-- `optimizar_rutas_vrp()`: Implementa el modelo CVRP completo
-- `calculate_distance_matrix_osrm()`: Calcula matriz de distancias
-- `crear_mapa_folium()`: Genera visualización interactiva
-- `main()`: Interfaz principal con configuración y resultados
-
-**Secciones**:
-- Líneas 36-53: Carga de barrios de CABA
-- Líneas 59-99: Generación de pedidos aleatorios
-- Líneas 121-167: Cálculo de matriz de distancias con OSRM
-- Líneas 207-307: Optimización con OR-Tools (CVRP)
-- Líneas 313-416: Visualización con Folium
-- Líneas 422-684: Interfaz de usuario con Streamlit
-- Líneas 753-854: Análisis económico y de sensibilidad
-
----
-
-#### `optimizador_rutas.py` (271 líneas)
-**Descripción**: Clase OptimizadorRutas para resolver TSP simple.
-
-**Clase principal**: `OptimizadorRutas`
-
-**Métodos clave**:
-- `__init__()`: Inicializa con matriz de distancias
-- `_crear_modelo_datos()`: Prepara datos para OR-Tools
-- `resolver()`: Resuelve el TSP con OR-Tools
-- `_extraer_ruta()`: Extrae la secuencia de nodos de la solución
-- `obtener_ruta_detallada()`: Retorna información detallada con distancias
-- `imprimir_ruta()`: Imprime la ruta de forma legible
-- `obtener_metricas()`: Calcula métricas de la ruta optimizada
-
-**Función auxiliar**:
-- `comparar_rutas()`: Compara dos rutas y calcula ahorro
-
-**Modelo**: TSP simple (K=1, sin restricción de capacidad)
-
----
-
-#### `analisis_sensibilidad.py` (573 líneas)
-**Descripción**: Clase AnalizadorSensibilidad para análisis económico.
-
-**Clase principal**: `AnalizadorSensibilidad`
-
-**Métodos de cálculo**:
-- `calcular_costo_nafta_por_km()`: Costo unitario de nafta
-- `calcular_tiempo_total_horas()`: Tiempo de operación
-- `calcular_costos_operacion()`: Costos totales (nafta + chofer)
-- `calcular_ingresos()`: Ingresos totales (base + variable)
-- `calcular_margen()`: Margen de ganancia y rentabilidad
-
-**Métodos de sensibilidad**:
-- `analizar_sensibilidad_nafta()`: Rango viable de precio de nafta
-- `analizar_sensibilidad_costo_chofer()`: Rango viable de costo de chofer
-- `analizar_sensibilidad_precio_base()`: Precio base mínimo
-- `analizar_sensibilidad_precio_por_km()`: Precio por km mínimo
-
-**Métodos de reporte**:
-- `generar_reporte_completo()`: Diccionario con todos los análisis
-- `generar_tabla_lingo()`: Tabla estilo LINGO con pandas
-- `obtener_interpretaciones()`: Interpretaciones en lenguaje natural
-
----
-
-#### `calculador_matriz.py` (295 líneas)
-**Descripción**: Calcula matriz de distancias usando OSM/OSRM.
-
-**Clase principal**: `CalculadorMatrizDistancias`
-
-**Métodos**:
-- `__init__()`: Inicializa con lista de puntos y nombres
-- `descargar_mapa_osm()`: Descarga red vial de OSM con OSMnx
-- `calcular_matriz()`: Calcula matriz completa de distancias
-- `_calcular_distancia_osm()`: Distancia entre dos puntos vía OSM
-- `imprimir_resumen()`: Estadísticas de la matriz
-- `guardar_cache()`: Guarda matriz en archivo pickle
-- `cargar_cache()`: Carga matriz desde cache
-
-**Métodos de cálculo**:
-- Usa OSMnx para descargar red vial de CABA
-- Calcula rutas más cortas con networkx
-- Fallback a distancia euclidiana si OSM falla
-
----
-
-#### `sistema_optimizacion.py` (416 líneas)
-**Descripción**: Sistema completo que integra todos los módulos.
-
-**Clase principal**: `SistemaOptimizacionRutas`
-
-**Métodos del flujo**:
-- `cargar_comunas()`: Carga shapefile de comunas de CABA
-- `generar_pedidos()`: Genera pedidos aleatorios en una comuna
-- `calcular_distancias()`: Calcula matriz de distancias
-- `optimizar_ruta()`: Resuelve el problema de ruteo
-- `generar_reporte()`: Crea reporte en formato texto
-- `exportar_ruta_csv()`: Exporta ruta optimizada a CSV
-- `ejecutar_flujo_completo()`: Pipeline completo de optimización
-
-**Función CLI**:
-- `main()`: Interfaz de línea de comandos con argparse
-
-**Uso desde terminal**:
-```bash
-python sistema_optimizacion.py --comuna 1 --pedidos 20 --seed 42 --tiempo 30
+st.metric(
+    "📈 Rentabilidad",
+    f"{margen['rentabilidad_porcentaje']:.1f}%"
+)
 ```
 
 ---
 
-#### `generador_pedidos.py` (297 líneas)
-**Descripción**: Genera pedidos aleatorios dentro de CABA.
+### 10.5 Análisis de Break-Even: Precio de Nafta
 
-**Funciones principales**:
-- `obtener_depot_por_comuna()`: Retorna coordenadas del depot de Andreani
-- `generar_pedidos_aleatorios_en_comuna()`: Genera puntos aleatorios
-- `crear_dataset_completo()`: Crea DataFrame con depot + pedidos
-- `listar_comunas_disponibles()`: Lista las 15 comunas de CABA
+**Objetivo**: Determinar el precio máximo de nafta que mantiene margen ≥ 0.
 
-**Depots de Andreani**:
-- 12 centros de distribución predefinidos en CABA
-- Coordenadas geográficas reales
-- Distribuidos estratégicamente por comunas
+**Fórmula algebraica** (`analisis_sensibilidad.py`, líneas 200-225):
 
----
+En el punto de equilibrio (margen = 0):
+```
+I_total = C_total
+I_total = C_nafta + C_chofer
+I_total = (p_nafta_BE / r_vehiculo) × D* + C_chofer_actual
+```
 
-#### `visualizador_rutas.py` (344 líneas)
-**Descripción**: Genera visualizaciones de rutas con Folium.
+Despejando p_nafta_BE:
+```
+p_nafta_BE = ((I_total - C_chofer_actual) × r_vehiculo) / D*
+```
 
-**Funciones**:
-- `crear_mapa_base()`: Crea mapa base de CABA
-- `agregar_depot()`: Agrega marcador del depósito
-- `agregar_puntos_pedidos()`: Agrega marcadores de entregas
-- `agregar_ruta_optimizada()`: Dibuja la ruta en el mapa
-- `agregar_estadisticas()`: Agrega panel con métricas
-- `guardar_mapa()`: Guarda mapa como archivo HTML
+**Implementación**:
+```python
+if self.distancia_total_km > 0:
+    precio_nafta_breakeven = (
+        (ingresos['ingreso_total'] - costos['costo_total_chofer'])
+        * self.rendimiento_vehiculo
+    ) / self.distancia_total_km
+    precio_nafta_breakeven = max(0, precio_nafta_breakeven)
+```
 
-**Elementos visuales**:
-- Mapa base de OpenStreetMap
-- Polígonos de barrios de CABA
-- Marcadores personalizados (depot, entregas)
-- Líneas de ruta con colores por vehículo
-- Popups interactivos con información
+**Aumento permitido**:
+```
+Δp_nafta = p_nafta_BE - p_nafta_actual
 
----
+Δp_nafta (%) = (Δp_nafta / p_nafta_actual) × 100
+```
 
-#### `funcion_distancia_OSM.py` (58 líneas)
-**Descripción**: Funciones auxiliares para cálculo de distancias con OSM.
+**Rangos de viabilidad**:
+```
+Límite inferior: $0/L (no puede ser negativo)
+Límite superior: p_nafta_BE (para mantener rentabilidad)
+Rango viable: [0, p_nafta_BE]
+```
 
-**Funciones**:
-- `calcular_distancia_haversine()`: Distancia "as the crow flies"
-- `obtener_distancia_osm()`: Distancia en red vial con OSMnx
-- `crear_matriz_distancias_osm()`: Matriz completa usando OSM
-
----
-
-### Datos
-
-#### `utils/barrios copy.csv` (687 KB)
-**Descripción**: Polígonos de los 48 barrios de CABA.
-
-**Columnas**:
-- `BARRIO`: Nombre del barrio
-- `COMUNA`: Número de comuna (1-15)
-- `WKT`: Geometría del polígono en formato WKT
-
-**Uso**: Validar que pedidos generados estén dentro de CABA.
+**Ejemplo**:
+- I_total = $46,784.50
+- C_chofer = $3,020
+- r_vehiculo = 10 km/L
+- D* = 45.23 km
+- **p_nafta_BE** = (($46,784.50 - $3,020) × 10) / 45.23 = **$9,674.88/L**
+- p_nafta_actual = $1,000/L
+- **Aumento permitido** = $9,674.88 - $1,000 = **$8,674.88/L** (+867.5%)
 
 ---
 
-#### `pedidos_ejemplo.csv`
-**Descripción**: Archivo de ejemplo con pedidos.
+### 10.6 Análisis de Break-Even: Costo del Chofer
 
-**Columnas**:
-- `order_id` o `pedido_id`: ID único del pedido
-- `lat`: Latitud del punto de entrega
-- `lon`: Longitud del punto de entrega
+**Objetivo**: Determinar el costo máximo del chofer que mantiene margen ≥ 0.
 
-**Formato**:
-```csv
-order_id,lat,lon
-1,-34.603277,-58.373207
-2,-34.577882,-58.420664
-3,-34.588249,-58.396328
+**Fórmula algebraica** (`analisis_sensibilidad.py`, líneas 317-362):
+
+En el punto de equilibrio:
+```
+I_total = C_nafta_actual + (c_chofer_BE × T_horas)
+
+c_chofer_BE = (I_total - C_nafta_actual) / T_horas
+```
+
+**Implementación**:
+```python
+tiempo_total_horas = self.calcular_tiempo_total_horas()
+
+if tiempo_total_horas > 0:
+    costo_chofer_breakeven = (
+        ingresos['ingreso_total'] - costos['costo_total_nafta']
+    ) / tiempo_total_horas
+    costo_chofer_breakeven = max(0, costo_chofer_breakeven)
+```
+
+**Rangos de viabilidad**:
+```
+Límite inferior: $0/h
+Límite superior: c_chofer_BE
+Rango viable: [0, c_chofer_BE]
+```
+
+**Ejemplo**:
+- I_total = $46,784.50
+- C_nafta = $4,523
+- T_horas = 1.51 h
+- **c_chofer_BE** = ($46,784.50 - $4,523) / 1.51 = **$27,987.42/h**
+- c_chofer_actual = $2,000/h
+- **Aumento permitido** = $27,987.42 - $2,000 = **$25,987.42/h** (+1,299.4%)
+
+---
+
+### 10.7 Análisis de Break-Even: Precio Base por Pedido
+
+**Objetivo**: Determinar el precio base mínimo que mantiene margen ≥ 0.
+
+**Fórmula algebraica** (`analisis_sensibilidad.py`, líneas 227-270):
+
+En el punto de equilibrio:
+```
+(p_base_BE × n_pedidos) + (p_km × D*) = C_total
+
+p_base_BE = (C_total - (p_km × D*)) / n_pedidos
+```
+
+**Implementación**:
+```python
+if self.num_pedidos > 0:
+    precio_base_breakeven = (
+        costos['costo_total'] - (self.precio_por_km * self.distancia_total_km)
+    ) / self.num_pedidos
+    precio_base_breakeven = max(0, precio_base_breakeven)
+```
+
+**Margen disponible**:
+```
+Δp_base = p_base_actual - p_base_BE    (cuánto puede BAJAR)
+
+Δp_base (%) = (Δp_base / p_base_actual) × 100
+```
+
+**Rangos de viabilidad**:
+```
+Límite inferior: p_base_BE (mínimo para no perder)
+Límite superior: ∞ (sin límite)
+Rango viable: [p_base_BE, ∞)
+```
+
+**Ejemplo**:
+- C_total = $7,543
+- p_km = $150/km
+- D* = 45.23 km
+- n_pedidos = 20
+- **p_base_BE** = ($7,543 - ($150 × 45.23)) / 20 = **$38.65/pedido**
+- p_base_actual = $2,000/pedido
+- **Margen disponible** = $2,000 - $38.65 = **$1,961.35/pedido** (-98.1%)
+
+**Interpretación**: El precio base puede bajar hasta $38.65/pedido y aún ser rentable, gracias al ingreso por kilómetro.
+
+---
+
+### 10.8 Análisis de Break-Even: Precio por Kilómetro
+
+**Objetivo**: Determinar el precio por km mínimo que mantiene margen ≥ 0.
+
+**Fórmula algebraica** (`analisis_sensibilidad.py`, líneas 272-315):
+
+En el punto de equilibrio:
+```
+(p_base × n_pedidos) + (p_km_BE × D*) = C_total
+
+p_km_BE = (C_total - (p_base × n_pedidos)) / D*
+```
+
+**Implementación**:
+```python
+if self.distancia_total_km > 0:
+    precio_por_km_breakeven = (
+        costos['costo_total'] - (self.precio_base_por_pedido * self.num_pedidos)
+    ) / self.distancia_total_km
+    precio_por_km_breakeven = max(0, precio_por_km_breakeven)
+```
+
+**Rangos de viabilidad**:
+```
+Límite inferior: p_km_BE (mínimo para no perder)
+Límite superior: ∞ (sin límite)
+Rango viable: [p_km_BE, ∞)
+```
+
+**Ejemplo**:
+- C_total = $7,543
+- p_base = $2,000/pedido
+- n_pedidos = 20
+- D* = 45.23 km
+- **p_km_BE** = ($7,543 - ($2,000 × 20)) / 45.23 = **-$716.89/km**
+- p_km_actual = $150/km
+- **Margen disponible** = $150 - (-$716.89) = **$866.89/km** (-577.9%)
+
+**Interpretación**: El ingreso base ($40,000) ya cubre todos los costos ($7,543). El precio por km puede ser incluso negativo (descuento) y aún ser rentable.
+
+---
+
+### 10.9 Tabla de Análisis Económico
+
+**Generación** (`analisis_sensibilidad.py`, líneas 381-434):
+```python
+def generar_tabla_lingo(self) -> pd.DataFrame:
+    # Genera DataFrame con análisis de todos los parámetros
+```
+
+**Visualización en UI** (`app_vrp.py`, líneas 834-836):
+```python
+tabla_lingo = analizador.generar_tabla_lingo()
+st.dataframe(tabla_lingo, use_container_width=True, hide_index=True)
+```
+
+**Formato de la tabla**:
+
+| Variable | Valor Actual | Costo/Ingreso Parcial | Precio Mínimo | Precio Máximo | Margen de Variación |
+|----------|--------------|----------------------|---------------|---------------|---------------------|
+| Precio Nafta ($/L) | $1,000.00 | Costo: $4,523.00 | $0.00 | $9,674.88 | +$8,674.88 (+867.5%) |
+| Costo Chofer ($/h) | $2,000.00 | Costo: $3,020.00 | $0.00 | $27,987.42 | +$25,987.42 (+1,299.4%) |
+| Precio Base ($/pedido) | $2,000.00 | Ingreso: $40,000.00 | $38.65 | ∞ | -$1,961.35 (-98.1%) |
+| Precio por km ($/km) | $150.00 | Ingreso: $6,784.50 | -$716.89 | ∞ | -$866.89 (-577.9%) |
+
+**Nota sobre el nombre**: Aunque se llama "tabla_lingo", NO es generada por LINGO ni contiene precios sombra/costos reducidos. Es solo un formato similar para presentación visual.
+
+---
+
+### 10.10 Interpretaciones Automáticas
+
+**Generación** (`analisis_sensibilidad.py`, líneas 436-554):
+```python
+def obtener_interpretaciones(self) -> List[str]:
+    # Genera interpretaciones en lenguaje natural
+```
+
+**Visualización en UI** (`app_vrp.py`, líneas 838-851):
+```python
+interpretaciones = analizador.obtener_interpretaciones()
+
+for interpretacion in interpretaciones:
+    if interpretacion.startswith("✓"):
+        st.success(interpretacion)
+    elif interpretacion.startswith("⚠"):
+        st.warning(interpretacion)
+    elif interpretacion.startswith("✗"):
+        st.error(interpretacion)
+    else:
+        st.info(interpretacion)
+```
+
+**Tipos de interpretaciones**:
+
+1. **Rentabilidad general**:
+   - ✓ Operación rentable (margen > 0)
+   - ⚠ Punto de equilibrio (margen = 0)
+   - ✗ Operación con pérdida (margen < 0)
+
+2. **Composición financiera**:
+   - 💵 Detalle de ingresos (base + variable)
+   - 💰 Detalle de costos (nafta + chofer)
+
+3. **Análisis por parámetro**:
+   - ⛽ Precio de nafta: rango viable
+   - 🚗 Costo de chofer: rango viable
+   - 📦 Precio base: mínimo requerido
+   - 📏 Precio por km: mínimo requerido
+
+**Ejemplo de interpretaciones**:
+
+```
+✓ La operación es RENTABLE con un margen de $39,241.50 (83.9% de rentabilidad)
+
+💵 Composición de Ingresos: Base $40,000.00 (20 pedidos × $2,000.00) +
+   Variable $6,784.50 (45.2 km × $150.00/km)
+
+💰 Composición de Costos: Nafta $4,523.00 + Chofer $3,020.00 (1.5h × $2,000.00/h)
+
+⛽ Precio Nafta: Puede aumentar hasta $8,674.88/L más (+867.5%) sin generar
+   pérdidas. Rango: $0.00/L - $9,674.88/L
+
+📦 Precio Base por Pedido: El ingreso por precio por km ($6,784.50) ya cubre
+   todos los costos ($7,543.00). Podrías bajar el precio base hasta $38.65 y
+   aún ser rentable. Margen disponible: $1,961.35/pedido (98.1%)
 ```
 
 ---
 
-### Archivos de Cache
+### 10.11 Limitaciones del Análisis Económico
 
-#### `vrp_streamlit_N.npz`
-**Descripción**: Matrices de distancias cacheadas.
+**Importante entender**:
 
-**Formato**: NumPy compressed (`.npz`)
+1. **Asume la distancia óptima como fija**:
+   - El análisis NO recalcula rutas al cambiar parámetros económicos
+   - Si cambias el precio de nafta, la ruta sigue siendo la misma
+   - Solo analiza si esa ruta es económicamente viable
 
-**Contenido**:
-- `distance`: Matriz NxN de distancias en metros
+2. **No analiza sensibilidad del modelo de optimización**:
+   - No dice "¿qué pasa si aumento la capacidad de un vehículo?"
+   - No dice "¿cuál es el valor de agregar un pedido más?"
+   - No proporciona precios sombra de restricciones
 
-**N**: Número de locaciones (depot + pedidos)
+3. **Es análisis de negocio, no de optimización**:
+   - Pregunta empresarial: "¿A qué precios puedo operar?"
+   - NO pregunta matemática: "¿Cuál es el valor dual de la restricción de capacidad?"
 
-**Beneficio**: Evita recalcular matrices costosas.
-
----
-
-#### `matriz_comuna_X.pkl`
-**Descripción**: Matrices de distancias por comuna (pickle).
-
-**Formato**: Python pickle
-
-**X**: ID de comuna (1-15)
-
----
-
-### Documentación
-
-#### `README_APP.md`
-**Descripción**: Documentación completa de la aplicación.
-
-**Secciones**:
-- Descripción del proyecto
-- Instalación y configuración
-- Uso de la aplicación web
-- Uso de la CLI
-- Estructura de archivos
-- Ejemplos de uso
+4. **Los parámetros económicos son externos al modelo VRP**:
+   - El modelo VRP minimiza distancia, no maximiza ganancia
+   - Los costos/ingresos se calculan después de la optimización
+   - No afectan la decisión de qué rutas tomar
 
 ---
 
-#### `INSTRUCCIONES_RAPIDAS.md`
-**Descripción**: Guía rápida de inicio.
+## 11. Implementación
 
-**Contenido**:
-- Instalación de dependencias
-- Ejecución de la app
-- Primer ejemplo
-- Troubleshooting
+### Archivo Principal
+
+**`app_vrp.py`** (961 líneas)
+
+Aplicación web Streamlit que implementa:
+- Interfaz de usuario con 3 columnas
+- Configuración de parámetros (depósito, flota, economía, pedidos)
+- Optimización con OR-Tools (función `optimizar_rutas_vrp`)
+- Visualización con Folium (función `crear_mapa_folium`)
+- Análisis económico post-optimización
+- Métricas y reportes
 
 ---
 
-#### `requirements.txt`
-**Descripción**: Dependencias de Python.
+### Estructura de la Aplicación
 
-**Librerías principales**:
+#### Configuración (Columna Izquierda)
+
+**Sección Depósito** (líneas 446-473):
+- Selector de ubicación predefinida o personalizada
+- Input de coordenadas (latitud, longitud)
+- Validación de rangos
+
+**Sección Flota** (líneas 477-481):
+- Slider: Cantidad de camiones (1-5)
+- Slider: Capacidad por camión (5-15)
+
+**Sección Parámetros Económicos** (líneas 485-544):
+- 6 inputs numéricos con valores por defecto
+- Tooltips explicativos
+
+**Sección Pedidos** (líneas 548-617):
+- Tab 1: Subir CSV (con validaciones)
+- Tab 2: Generar aleatorios dentro de CABA
+- Contador de pedidos cargados
+- Validación de capacidad total
+
+**Botón Optimizar** (líneas 630-684):
+- Deshabilitado si no hay pedidos
+- Crea lista de ubicaciones: [DEPOT] + orders
+- Calcula matriz de distancias (con spinner)
+- Ejecuta optimización (con spinner, 30s)
+- Guarda resultados en session_state
+- Recarga la aplicación
+
+---
+
+#### Visualización (Columna Central)
+
+**Mapa Interactivo** (líneas 690-749):
+- Selector de vista (por camión o general)
+- Mapa Folium con rutas reales (OSRM)
+- Colores por vehículo
+- Marcadores interactivos
+- Polígonos de barrios de fondo
+
+**Análisis Económico** (líneas 751-854):
+- 4 métricas principales en columnas
+- Tabla de análisis de sensibilidad
+- Interpretaciones automáticas con íconos
+
+---
+
+#### Órdenes y Métricas (Columna Derecha)
+
+**Detalle de Ruta** (líneas 860-912):
+- Selector de camión
+- Lista de paradas con coordenadas
+- Identificación de depot vs pedidos
+
+**Métricas de Ruta** (líneas 915-930):
+- Distancia del camión seleccionado
+- Paquetes transportados vs capacidad
+
+**Métricas Generales** (líneas 934-950):
+- Distancia total de la flota
+- Total de paquetes
+- Camiones utilizados / disponibles
+- Utilización de flota (%)
+- Tiempo de optimización
+
+---
+
+### Función Principal de Optimización
+
+**`optimizar_rutas_vrp()`** (líneas 207-307)
+
+**Entrada**:
+- `all_locations`: Lista [depot] + [orders]
+- `num_vehicles`: Número de camiones (K)
+- `vehicle_capacity`: Capacidad por camión (Q)
+- `distance_matrix`: Matriz NxN en metros
+
+**Proceso**:
+1. Crear diccionario `data` con parámetros del modelo
+2. Instanciar RoutingIndexManager
+3. Instanciar RoutingModel
+4. Registrar callback de distancia
+5. Registrar callback de demanda
+6. Agregar dimensión de capacidad
+7. Configurar parámetros de búsqueda
+8. Resolver con `SolveWithParameters()`
+9. Extraer rutas para cada vehículo
+
+**Salida**:
+- `solution`: Objeto solución de OR-Tools
+- `routing`: Modelo de routing
+- `manager`: Manager de índices
+- `data`: Diccionario de datos
+- `all_routes`: Lista de diccionarios con información de cada ruta:
+  ```python
+  {
+      'vehicle': 1,           # ID del vehículo
+      'distance': 15230,      # Distancia en metros
+      'packages': 12,         # Paquetes transportados
+      'nodes': [0, 5, 12, 3, 0]  # Secuencia de nodos
+  }
+  ```
+
+**Retorno en caso de fallo**:
+```python
+return None, None, None, None, None
+```
+
+---
+
+### Integración con Análisis Económico
+
+**Creación del analizador** (`app_vrp.py`, líneas 779-790):
+```python
+from analisis_sensibilidad import AnalizadorSensibilidad
+
+analizador = AnalizadorSensibilidad(
+    distancia_total_km=distancia_total_km,  # D* ya calculada
+    num_rutas=len(all_routes),
+    num_pedidos=num_pedidos,  # n ya conocido
+    distancias_por_ruta=distancias_por_ruta,
+    # Parámetros económicos desde session_state
+    precio_nafta=precio_nafta_sess,
+    rendimiento_vehiculo=rendimiento_sess,
+    precio_base_por_pedido=precio_base_sess,
+    precio_por_km=precio_por_km_sess,
+    costo_chofer_por_hora=costo_chofer_sess,
+    velocidad_promedio_kmh=velocidad_sess
+)
+```
+
+**Cálculos** (líneas 792-795):
+```python
+costos = analizador.calcular_costos_operacion()  # Diccionario con costos
+ingresos = analizador.calcular_ingresos()  # Diccionario con ingresos
+margen = analizador.calcular_margen()  # Diccionario con margen y rentabilidad
+```
+
+**Presentación de resultados** (líneas 797-851):
+- Métricas en columnas (st.metric)
+- Tabla de sensibilidad (st.dataframe)
+- Interpretaciones con formato condicional (st.success/warning/error/info)
+
+---
+
+### Generación de Pedidos Aleatorios
+
+**Función `generate_random_deliveries_in_caba()`** (líneas 59-99)
+
+**Algoritmo**:
+1. Obtener bounding box del polígono de CABA
+2. Generar coordenadas aleatorias uniformes dentro del bounding box
+3. Verificar si el punto está dentro del polígono de CABA (usando shapely)
+4. Si está dentro, agregar a la lista de pedidos
+5. Repetir hasta generar n pedidos (máx. 100n intentos)
+
+**Validación geográfica**:
+```python
+point = Point(random_lon, random_lat)
+if caba_polygon.contains(point):
+    # Punto válido dentro de CABA
+```
+
+**Estructura de pedido**:
+```python
+order = {
+    'order_id': len(orders) + 1,
+    'lat': random_lat,
+    'lon': random_lon,
+    'type': 'order'
+}
+```
+
+---
+
+### Cache y Persistencia
+
+**Session State de Streamlit**:
+
+Almacena entre reruns:
+```python
+st.session_state = {
+    'solution': solution,  # Solución de OR-Tools
+    'routing': routing,  # Modelo de routing
+    'manager': manager,  # Manager de índices
+    'data': data,  # Diccionario de datos
+    'all_routes': all_routes,  # Rutas calculadas
+    'all_locations': all_locations,  # Ubicaciones
+    'distance_matrix': distance_matrix,  # Matriz de distancias
+    'optimization_time': elapsed_time,  # Tiempo de optimización
+    'generated_orders': orders,  # Pedidos generados
+    # Parámetros económicos
+    'precio_nafta': precio_nafta,
+    'rendimiento_vehiculo': rendimiento_vehiculo,
+    'precio_base_por_pedido': precio_base_por_pedido,
+    'precio_por_km': precio_por_km,
+    'costo_chofer_por_hora': costo_chofer_por_hora,
+    'velocidad_promedio_kmh': velocidad_promedio_kmh
+}
+```
+
+**Cache de matrices de distancias**:
+- Archivos: `vrp_streamlit_{n}.npz`
+- Formato: NumPy compressed
+- Contenido: Matriz NxN de distancias en metros
+
+**Cache de datos geodésicos**:
+```python
+@st.cache_data
+def cargar_barrios_caba():
+    # Se ejecuta solo una vez y se cachea
+```
+
+---
+
+### Dependencias
+
+**Librerías principales** (líneas 6-20):
+```python
+import streamlit as st           # Interfaz web
+import pandas as pd              # Datos tabulares
+import numpy as np               # Operaciones numéricas
+import geopandas as gpd          # Datos geoespaciales
+from shapely import wkt          # Geometrías
+from shapely.geometry import Point  # Puntos geográficos
+import requests                  # Llamadas HTTP (OSRM)
+import polyline                  # Decodificación de rutas
+import folium                    # Mapas interactivos
+from streamlit_folium import st_folium  # Integración Folium-Streamlit
+from ortools.constraint_solver import routing_enums_pb2  # Enumeraciones OR-Tools
+from ortools.constraint_solver import pywrapcp  # Solver de constraint programming
+import os                        # Sistema operativo
+import time                      # Medición de tiempo
+from analisis_sensibilidad import AnalizadorSensibilidad  # Análisis económico
+```
+
+**Versiones requeridas** (desde `requirements.txt`):
 ```
 ortools>=9.7.0
 streamlit>=1.28.0
@@ -1243,8 +1719,6 @@ folium>=0.14.0
 streamlit-folium>=0.15.0
 requests>=2.31.0
 polyline>=2.0.0
-osmnx>=1.5.0
-networkx>=3.1
 shapely>=2.0.0
 ```
 
@@ -1252,62 +1726,124 @@ shapely>=2.0.0
 
 ## Referencias
 
-### Bibliografía
+### Bibliografía Académica
 
 1. **Toth, P., & Vigo, D. (2014)**. *Vehicle Routing: Problems, Methods, and Applications* (2nd ed.). SIAM.
 
 2. **Laporte, G. (2009)**. Fifty years of vehicle routing. *Transportation Science*, 43(4), 408-416.
 
-3. **Google OR-Tools Documentation** (2024). *Vehicle Routing Problem*.
+3. **Voudouris, C., & Tsang, E. (1999)**. Guided local search and its application to the traveling salesman problem. *European Journal of Operational Research*, 113(2), 469-499.
+
+### Herramientas y Documentación
+
+4. **Google OR-Tools Documentation** (2024). *Vehicle Routing Problem*.
    https://developers.google.com/optimization/routing
 
-4. **OpenStreetMap Wiki** (2024). *Routing*.
+5. **OpenStreetMap Wiki** (2024). *Routing*.
    https://wiki.openstreetmap.org/wiki/Routing
 
-5. **OSRM Project** (2024). *Open Source Routing Machine*.
-   http://project-osrm.org/
+6. **OSRM Project** (2024). *Open Source Routing Machine - API Documentation*.
+   http://project-osrm.org/docs/v5.24.0/api/
 
-### Herramientas y Bibliotecas
+7. **Streamlit Documentation** (2024). *Build data apps in Python*.
+   https://docs.streamlit.io/
 
-- **OR-Tools**: https://github.com/google/or-tools
-- **Streamlit**: https://streamlit.io/
-- **Folium**: https://python-visualization.github.io/folium/
-- **OSMnx**: https://github.com/gboeing/osmnx
-- **GeoPandas**: https://geopandas.org/
+### Bibliotecas Utilizadas
+
+8. **OR-Tools**: https://github.com/google/or-tools
+9. **Streamlit**: https://streamlit.io/
+10. **Folium**: https://python-visualization.github.io/folium/
+11. **GeoPandas**: https://geopandas.org/
+12. **Shapely**: https://shapely.readthedocs.io/
 
 ### Datos Geográficos
 
-- **OpenStreetMap**: https://www.openstreetmap.org/
-- **Buenos Aires Data**: https://data.buenosaires.gob.ar/
+13. **OpenStreetMap**: https://www.openstreetmap.org/
+14. **Buenos Aires Data**: https://data.buenosaires.gob.ar/
 
 ---
 
 ## Notas Finales
 
-Este documento describe la formulación matemática completa del **Capacitated Vehicle Routing Problem (CVRP)** implementado en el proyecto, incluyendo:
+### Resumen del Modelo
 
-- Modelo matemático formal con función objetivo y restricciones
-- Parámetros configurables del problema
-- Variables de decisión binarias
-- Modelo económico completo (costos e ingresos)
-- Análisis de sensibilidad de parámetros económicos
-- Método de solución con Google OR-Tools
-- Detalles de implementación en Python
+Este documento describe la implementación de un **Capacitated Vehicle Routing Problem (CVRP)** para distribución urbana en CABA, con las siguientes características:
 
-El sistema es capaz de:
-- Optimizar rutas para flotas de 1-5 vehículos
-- Manejar capacidades de 5-15 paquetes por vehículo
-- Procesar hasta 50 pedidos simultáneamente
-- Calcular distancias reales en red vial de CABA
-- Analizar viabilidad económica de la operación
-- Determinar rangos de sensibilidad de todos los parámetros
-- Visualizar rutas en mapas interactivos
+**Modelo de optimización**:
+- Función objetivo: Minimizar distancia total
+- Restricción principal: Capacidad de vehículos
+- Solver: Google OR-Tools (Constraint Programming + Metaheurísticas)
+- Tiempo de ejecución: 30 segundos
+- Calidad de solución: 90-98% del óptimo
+
+**Análisis económico post-optimización**:
+- Cálculo de costos operativos (nafta + chofer)
+- Cálculo de ingresos (base + variable por km)
+- Análisis de break-even para 4 parámetros económicos
+- **Importante**: No son precios sombra ni costos reducidos
+
+**Implementación**:
+- Aplicación web interactiva con Streamlit
+- Distancias reales calculadas con OSRM API
+- Visualización con mapas interactivos (Folium)
+- Configuración flexible de parámetros
+- Generación automática de pedidos en CABA
+
+### Diferencias con Programación Lineal Clásica
+
+| Aspecto | LP Clásico (Simplex) | Este Proyecto (OR-Tools) |
+|---------|---------------------|-------------------------|
+| Tipo de problema | LP (Lineal) | CVRP (NP-Hard) |
+| Método de solución | Simplex | Metaheurísticas (GLS) |
+| Garantía de optimalidad | ✅ Sí | ❌ No (90-98%) |
+| Precios sombra | ✅ Automáticos | ❌ No disponibles |
+| Costos reducidos | ✅ Automáticos | ❌ No disponibles |
+| Análisis de sensibilidad | ✅ Del modelo | ❌ Solo económico |
+| Tiempo de ejecución | Variable (puede ser largo) | 30 segundos (fijo) |
+| Escalabilidad | Limitada para problemas grandes | Buena (hasta 50 pedidos) |
+
+### Aplicabilidad
+
+**Este proyecto es adecuado para**:
+- Planificación operativa de distribución urbana
+- Análisis de viabilidad económica de servicios de entrega
+- Optimización de rutas en tiempo real (30 segundos)
+- Escenarios con 5-50 pedidos y 1-5 vehículos
+- Contexto urbano con distancias reales (calles)
+
+**Este proyecto NO es adecuado para**:
+- Certificación matemática de optimalidad
+- Obtención de precios sombra o valores marginales
+- Análisis de sensibilidad del modelo de optimización
+- Problemas con más de 50 pedidos (tiempo de cálculo)
+- Contexto donde se requiere 100% de optimalidad garantizada
+
+### Honestidad Metodológica
+
+Es fundamental entender que:
+
+1. **El análisis económico NO es análisis de sensibilidad clásico**
+   - No proviene del solver
+   - Se calcula manualmente con fórmulas algebraicas
+   - Asume la solución de optimización como fija
+
+2. **OR-Tools no proporciona información dual**
+   - No hay precios sombra de restricciones
+   - No hay costos reducidos de variables
+   - No hay rangos de sensibilidad de coeficientes
+
+3. **La solución es casi óptima, no óptima**
+   - Calidad típica: 90-98% del óptimo global
+   - Suficiente para aplicaciones prácticas
+   - No suficiente para demostraciones matemáticas rigurosas
+
+Esta claridad metodológica es esencial para el uso académico y profesional correcto del proyecto.
 
 ---
 
 **Última actualización**: 2025-11-17
 
-**Autores**: Implementación del proyecto Vehicle Routing Problem
+**Basado en**: `app_vrp.py` (implementación final)
 
 **Institución**: Universidad Católica Argentina (UCA)
 
