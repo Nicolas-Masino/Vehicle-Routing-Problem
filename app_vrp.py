@@ -204,7 +204,7 @@ def get_osrm_route_geometry(locations_indices, all_locations):
 # FUNCIÓN DE OPTIMIZACIÓN - OR-TOOLS
 # ============================================================================
 
-def optimizar_rutas_vrp(all_locations, num_vehicles, vehicle_capacity, distance_matrix):
+def optimizar_rutas_vrp(all_locations, num_vehicles, vehicle_capacity, distance_matrix, tiempo_limite_segundos=30):
     """
     Optimiza las rutas usando OR-Tools
 
@@ -213,6 +213,7 @@ def optimizar_rutas_vrp(all_locations, num_vehicles, vehicle_capacity, distance_
         num_vehicles: número de camiones
         vehicle_capacity: capacidad de cada camión
         distance_matrix: matriz de distancias
+        tiempo_limite_segundos: tiempo límite de optimización en segundos (default: 30)
 
     Returns:
         solution, routing, manager, data, all_routes
@@ -267,7 +268,7 @@ def optimizar_rutas_vrp(all_locations, num_vehicles, vehicle_capacity, distance_
     search_parameters.local_search_metaheuristic = (
         routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
     )
-    search_parameters.time_limit.seconds = 30
+    search_parameters.time_limit.seconds = tiempo_limite_segundos
 
     # Resolver
     solution = routing.SolveWithParameters(search_parameters)
@@ -420,6 +421,19 @@ def crear_mapa_folium(all_locations, all_routes, barrios_gdf, selected_vehicle=N
 # ============================================================================
 
 def main():
+    # Logo
+    try:
+        logo_path = 'logo.png'
+        if os.path.exists(logo_path):
+            st.image(logo_path, width=300)
+        else:
+            # Intentar con ruta alternativa
+            logo_path = 'utils/logo.png'
+            if os.path.exists(logo_path):
+                st.image(logo_path, width=300)
+    except:
+        pass  # Si no hay logo, continuar sin él
+
     st.title("Optimizador de Rutas de Vehículos (VRP)")
     st.markdown("---")
 
@@ -627,6 +641,29 @@ def main():
 
         st.markdown("---")
 
+        # Configuración de optimización
+        st.subheader("Configuración de Optimización")
+
+        tiempo_limite = st.slider(
+            "Tiempo Límite de Optimización (segundos)",
+            min_value=10,
+            max_value=300,
+            value=30,
+            step=10,
+            help="Tiempo máximo que el algoritmo buscará la solución óptima. Aumenta este valor si tienes muchos pedidos."
+        )
+
+        # Calcular número de pedidos actual
+        num_pedidos_actual = len(orders) if orders else 0
+
+        # Mensaje de recomendación dinámico
+        if num_pedidos_actual > 30:
+            st.warning(f"⚠️ Tienes {num_pedidos_actual} pedidos. Se recomienda usar al menos 60 segundos de tiempo límite para obtener mejores resultados.")
+        elif num_pedidos_actual > 20:
+            st.info(f"ℹ️ Tienes {num_pedidos_actual} pedidos. Con 30 segundos es suficiente, pero puedes aumentar el tiempo para buscar mejores soluciones.")
+
+        st.markdown("---")
+
         # Botón de optimización
         optimizar_disabled = len(orders) == 0
 
@@ -649,13 +686,14 @@ def main():
                 )
 
             # Optimizar
-            with st.spinner("Optimizando rutas... (máx. 30 segundos)"):
+            with st.spinner(f"Optimizando rutas... (máx. {tiempo_limite} segundos)"):
                 start_time = time.time()
                 solution, routing, manager, data, all_routes = optimizar_rutas_vrp(
                     all_locations,
                     num_vehicles,
                     vehicle_capacity,
-                    distance_matrix
+                    distance_matrix,
+                    tiempo_limite_segundos=tiempo_limite
                 )
                 elapsed_time = time.time() - start_time
 
