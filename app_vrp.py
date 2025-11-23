@@ -630,14 +630,28 @@ def main():
             orders = st.session_state['generated_orders']
 
         # Mostrar contador de pedidos
+        pedidos_no_procesados = 0
         if orders:
-            st.info(f"**{len(orders)} pedidos cargados**")
-
             # Validar capacidad
             total_capacity = num_vehicles * vehicle_capacity
+
             if len(orders) > total_capacity:
-                st.error(f"Total de pedidos ({len(orders)}) excede la capacidad total ({total_capacity})")
-                st.stop()
+                pedidos_no_procesados = len(orders) - total_capacity
+                st.warning(f"⚠️ **Capacidad insuficiente**: Tienes {len(orders)} pedidos pero solo capacidad para {total_capacity}.")
+                st.info(f"ℹ️ Se procesarán los primeros **{total_capacity} pedidos**. Los {pedidos_no_procesados} pedidos restantes quedarán sin procesar.")
+                st.info(f"💡 **Sugerencia**: Agrega {int(np.ceil(pedidos_no_procesados / vehicle_capacity))} camión(es) más o aumenta la capacidad para procesar todos los pedidos.")
+
+                # Guardar info para análisis posterior
+                st.session_state['pedidos_no_procesados'] = pedidos_no_procesados
+                st.session_state['pedidos_totales'] = len(orders)
+
+                # Limitar pedidos a la capacidad disponible
+                orders = orders[:total_capacity]
+            else:
+                st.session_state['pedidos_no_procesados'] = 0
+                st.session_state['pedidos_totales'] = len(orders)
+
+            st.info(f"**{len(orders)} pedidos a procesar**")
 
         st.markdown("---")
 
@@ -887,6 +901,109 @@ def main():
                         st.error(interpretacion)
                     else:
                         st.info(interpretacion)
+
+                # ====================================================================
+                # ANÁLISIS DE CAPACIDAD NO UTILIZADA
+                # ====================================================================
+                st.markdown("---")
+                st.subheader("Análisis de Oportunidad - Capacidad Adicional")
+
+                pedidos_no_procesados = st.session_state.get('pedidos_no_procesados', 0)
+                pedidos_totales = st.session_state.get('pedidos_totales', num_pedidos)
+
+                if pedidos_no_procesados > 0:
+                    # Calcular camiones adicionales necesarios
+                    camiones_adicionales = int(np.ceil(pedidos_no_procesados / data['vehicle_capacities'][0]))
+
+                    # Estimar distancia adicional (aproximación: proporcional a pedidos)
+                    distancia_adicional_km = (distancia_total_km / num_pedidos) * pedidos_no_procesados
+
+                    # Calcular costos adicionales
+                    costo_nafta_adicional = (distancia_adicional_km / rendimiento_sess) * precio_nafta_sess
+                    tiempo_adicional_horas = distancia_adicional_km / velocidad_sess
+                    costo_chofer_adicional = tiempo_adicional_horas * costo_chofer_sess
+                    costo_total_adicional = costo_nafta_adicional + costo_chofer_adicional
+
+                    # Calcular ingresos adicionales
+                    ingreso_base_adicional = pedidos_no_procesados * precio_base_sess
+                    ingreso_variable_adicional = distancia_adicional_km * precio_por_km_sess
+                    ingreso_total_adicional = ingreso_base_adicional + ingreso_variable_adicional
+
+                    # Calcular margen adicional
+                    margen_adicional = ingreso_total_adicional - costo_total_adicional
+
+                    # Totales proyectados
+                    ingreso_total_proyectado = ingresos['ingreso_total'] + ingreso_total_adicional
+                    costo_total_proyectado = costos['costo_total'] + costo_total_adicional
+                    margen_total_proyectado = ingreso_total_proyectado - costo_total_proyectado
+                    rentabilidad_proyectada = (margen_total_proyectado / ingreso_total_proyectado * 100) if ingreso_total_proyectado > 0 else 0
+
+                    # Mostrar advertencia
+                    st.warning(f"⚠️ **{pedidos_no_procesados} pedidos no fueron procesados** por falta de capacidad.")
+
+                    # Mostrar métricas en columnas
+                    col_op1, col_op2, col_op3 = st.columns(3)
+
+                    with col_op1:
+                        st.metric(
+                            "🚛 Camiones Adicionales Necesarios",
+                            f"{camiones_adicionales}",
+                            help=f"Se necesitan {camiones_adicionales} camión(es) adicional(es) con capacidad de {data['vehicle_capacities'][0]} paquetes"
+                        )
+
+                    with col_op2:
+                        st.metric(
+                            "💰 Ingreso Potencial Perdido",
+                            f"${ingreso_total_adicional:,.2f}",
+                            help=f"Base: ${ingreso_base_adicional:,.2f} + Variable: ${ingreso_variable_adicional:,.2f}"
+                        )
+
+                    with col_op3:
+                        st.metric(
+                            "📊 Margen Potencial Perdido",
+                            f"${margen_adicional:,.2f}",
+                            delta=f"{(margen_adicional/ingreso_total_adicional*100):.1f}%" if ingreso_total_adicional > 0 else "0%",
+                            help=f"Costo adicional estimado: ${costo_total_adicional:,.2f}"
+                        )
+
+                    st.markdown("---")
+
+                    # Comparación: Actual vs Proyectado
+                    st.markdown("##### Comparación: Situación Actual vs Con Capacidad Completa")
+
+                    col_comp1, col_comp2 = st.columns(2)
+
+                    with col_comp1:
+                        st.markdown("**📊 Situación Actual**")
+                        st.metric("Pedidos procesados", f"{num_pedidos}")
+                        st.metric("Ingreso actual", f"${ingresos['ingreso_total']:,.2f}")
+                        st.metric("Margen actual", f"${margen['margen_total']:,.2f}")
+
+                    with col_comp2:
+                        st.markdown(f"**🚀 Proyección con {camiones_adicionales} camión(es) más**")
+                        st.metric("Pedidos totales", f"{pedidos_totales}", delta=f"+{pedidos_no_procesados}")
+                        st.metric("Ingreso proyectado", f"${ingreso_total_proyectado:,.2f}", delta=f"+${ingreso_total_adicional:,.2f}")
+                        st.metric("Margen proyectado", f"${margen_total_proyectado:,.2f}", delta=f"+${margen_adicional:,.2f}")
+
+                    # Recomendación
+                    if margen_adicional > 0:
+                        st.success(f"✅ **Recomendación**: Vale la pena agregar {camiones_adicionales} camión(es) más. El margen adicional de ${margen_adicional:,.2f} justifica la inversión.")
+                    else:
+                        st.error(f"❌ **Advertencia**: Agregar {camiones_adicionales} camión(es) más generaría pérdidas de ${abs(margen_adicional):,.2f}. Los costos superan los ingresos adicionales.")
+
+                    # Análisis detallado
+                    with st.expander("📋 Ver análisis detallado"):
+                        st.markdown("**Supuestos del análisis:**")
+                        st.markdown(f"- Distancia estimada para {pedidos_no_procesados} pedidos adicionales: **{distancia_adicional_km:.2f} km** (proporcional a la ruta actual)")
+                        st.markdown(f"- Tiempo estimado: **{tiempo_adicional_horas:.2f} horas**")
+                        st.markdown(f"- Costo de nafta adicional: **${costo_nafta_adicional:,.2f}**")
+                        st.markdown(f"- Costo de chofer adicional: **${costo_chofer_adicional:,.2f}**")
+                        st.markdown(f"- Ingreso base adicional: **${ingreso_base_adicional:,.2f}**")
+                        st.markdown(f"- Ingreso variable adicional: **${ingreso_variable_adicional:,.2f}**")
+
+
+                else:
+                    st.success("✅ **Todos los pedidos fueron procesados**. La capacidad actual es suficiente para la demanda.")
 
             except Exception as e:
                 st.error(f"Error en análisis económico: {e}")
