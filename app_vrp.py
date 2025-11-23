@@ -341,9 +341,11 @@ def crear_mapa_folium(all_locations, all_routes, barrios_gdf, selected_vehicle=N
 
     # Agregar polígonos de barrios (fondo)
     if barrios_gdf is not None:
+        # Convertir a GeoJSON y aplicar estilo estático
         folium.GeoJson(
-            barrios_gdf,
-            style_function=lambda x: {
+            barrios_gdf.to_json(),
+            style_function=None,
+            style={
                 'fillColor': 'lightgray',
                 'color': 'gray',
                 'weight': 0.5,
@@ -633,11 +635,24 @@ def main():
         if orders:
             st.info(f"**{len(orders)} pedidos cargados**")
 
-            # Validar capacidad
+            # Validar capacidad y manejar exceso
             total_capacity = num_vehicles * vehicle_capacity
+            pedidos_excedentes = []
+            
             if len(orders) > total_capacity:
-                st.error(f"Total de pedidos ({len(orders)}) excede la capacidad total ({total_capacity})")
-                st.stop()
+                pedidos_excedentes = orders[total_capacity:]
+                orders = orders[:total_capacity]
+                
+                st.warning(
+                    f"⚠️ **Capacidad Excedida**: Se cargaron {len(orders) + len(pedidos_excedentes)} pedidos pero la capacidad es de {total_capacity}. "
+                    f"Se calcularán las rutas con los primeros {len(orders)} pedidos. "
+                    f"Los {len(pedidos_excedentes)} pedidos restantes se analizarán como oportunidad perdida."
+                )
+                
+                # Guardar pedidos excedentes en session_state
+                st.session_state['pedidos_excedentes'] = pedidos_excedentes
+            else:
+                st.session_state['pedidos_excedentes'] = []
 
         st.markdown("---")
 
@@ -717,6 +732,10 @@ def main():
                 st.session_state['precio_por_km'] = precio_por_km
                 st.session_state['costo_chofer_por_hora'] = costo_chofer_por_hora
                 st.session_state['velocidad_promedio_kmh'] = velocidad_promedio_kmh
+                
+                # Guardar info de capacidad para análisis
+                st.session_state['num_vehicles'] = num_vehicles
+                st.session_state['vehicle_capacity'] = vehicle_capacity
 
                 st.success(f"Optimización completada en {elapsed_time:.2f} segundos")
                 st.rerun()
@@ -775,8 +794,9 @@ def main():
 
             if barrios_gdf is not None:
                 folium.GeoJson(
-                    barrios_gdf,
-                    style_function=lambda x: {
+                    barrios_gdf.__geo_interface__,
+                    style_function=None,
+                    style={
                         'fillColor': 'lightgray',
                         'color': 'gray',
                         'weight': 0.5,
@@ -887,6 +907,132 @@ def main():
                         st.error(interpretacion)
                     else:
                         st.info(interpretacion)
+                
+                # ===== ANÁLISIS DE PEDIDOS EXCEDENTES =====
+                if 'pedidos_excedentes' in st.session_state and len(st.session_state['pedidos_excedentes']) > 0:
+                    st.markdown("---")
+                    st.subheader("📦 Análisis de Capacidad Perdida")
+                    
+                    pedidos_excedentes = st.session_state['pedidos_excedentes']
+                    num_excedentes = len(pedidos_excedentes)
+                    
+                    # Calcular distancia estimada para pedidos excedentes (aproximación)
+                    # Usar distancia promedio por pedido de la solución actual
+                    distancia_promedio_por_pedido = distancia_total_km / num_pedidos if num_pedidos > 0 else 5.0
+                    distancia_excedente_estimada = distancia_promedio_por_pedido * num_excedentes
+                    
+                    # Calcular vehículos adicionales necesarios
+                    vehicle_capacity_stored = st.session_state.get('vehicle_capacity', 15)
+                    vehiculos_adicionales = int(np.ceil(num_excedentes / vehicle_capacity_stored))
+                    
+                    # Calcular costos adicionales
+                    costo_nafta_por_km = precio_nafta_sess / rendimiento_sess
+                    costo_nafta_adicional = costo_nafta_por_km * distancia_excedente_estimada
+                    
+                    tiempo_adicional_horas = distancia_excedente_estimada / velocidad_sess
+                    costo_chofer_adicional = costo_chofer_sess * tiempo_adicional_horas
+                    
+                    costo_total_adicional = costo_nafta_adicional + costo_chofer_adicional
+                    
+                    # Calcular ingresos adicionales
+                    ingreso_base_adicional = num_excedentes * precio_base_sess
+                    ingreso_variable_adicional = distancia_excedente_estimada * precio_por_km_sess
+                    ingreso_total_adicional = ingreso_base_adicional + ingreso_variable_adicional
+                    
+                    # Calcular margen adicional
+                    margen_adicional = ingreso_total_adicional - costo_total_adicional
+                    rentabilidad_adicional = (margen_adicional / ingreso_total_adicional * 100) if ingreso_total_adicional > 0 else 0
+                    
+                    # Mostrar métricas de oportunidad perdida
+                    col_exc1, col_exc2, col_exc3, col_exc4 = st.columns(4)
+                    
+                    with col_exc1:
+                        st.metric(
+                            "📦 Pedidos No Atendidos",
+                            num_excedentes,
+                            help="Pedidos que exceden la capacidad actual"
+                        )
+                    
+                    with col_exc2:
+                        st.metric(
+                            "🚛 Vehículos Necesarios",
+                            f"+{vehiculos_adicionales}",
+                            help=f"Vehículos adicionales para atender {num_excedentes} pedidos con capacidad de {vehicle_capacity_stored}"
+                        )
+                    
+                    with col_exc3:
+                        color_margen = "normal" if margen_adicional >= 0 else "inverse"
+                        st.metric(
+                            "💰 Ingreso Perdido",
+                            f"${ingreso_total_adicional:,.2f}",
+                            delta=f"Margen: ${margen_adicional:,.2f}",
+                            delta_color=color_margen,
+                            help=f"Ingreso potencial de los {num_excedentes} pedidos no atendidos"
+                        )
+                    
+                    with col_exc4:
+                        st.metric(
+                            "💵 Costo Adicional",
+                            f"${costo_total_adicional:,.2f}",
+                            help=f"Nafta: ${costo_nafta_adicional:,.2f} + Chofer: ${costo_chofer_adicional:,.2f}"
+                        )
+                    
+                    # Detalles de la oportunidad
+                    st.markdown("##### 💡 Análisis de Oportunidad")
+                    
+                    if margen_adicional > 0:
+                        st.success(
+                            f"✓ **Oportunidad Rentable**: Si aumentas la capacidad con {vehiculos_adicionales} vehículo(s) adicional(es), "
+                            f"podrías generar un margen adicional de **${margen_adicional:,.2f}** ({rentabilidad_adicional:.1f}% de rentabilidad) "
+                            f"atendiendo los {num_excedentes} pedidos pendientes."
+                        )
+                        
+                        # Margen total combinado
+                        margen_total_combinado = margen['margen_total'] + margen_adicional
+                        ingreso_total_combinado = ingresos['ingreso_total'] + ingreso_total_adicional
+                        rentabilidad_combinada = (margen_total_combinado / ingreso_total_combinado * 100) if ingreso_total_combinado > 0 else 0
+                        
+                        st.info(
+                            f"📊 **Margen Total Potencial**: ${margen_total_combinado:,.2f} ({rentabilidad_combinada:.1f}% de rentabilidad) "
+                            f"si atendieras todos los {num_pedidos + num_excedentes} pedidos."
+                        )
+                    elif margen_adicional == 0:
+                        st.warning(
+                            f"⚠️ **Punto de Equilibrio**: Atender los {num_excedentes} pedidos adicionales con {vehiculos_adicionales} vehículo(s) "
+                            f"generaría ingresos de ${ingreso_total_adicional:,.2f} pero con costos iguales (margen = 0)."
+                        )
+                    else:
+                        st.error(
+                            f"✗ **Oportunidad No Rentable**: Atender los {num_excedentes} pedidos adicionales generaría una **pérdida** de ${abs(margen_adicional):,.2f}. "
+                            f"Los ingresos (${ingreso_total_adicional:,.2f}) no cubren los costos (${costo_total_adicional:,.2f})."
+                        )
+                    
+                    # Recomendaciones
+                    st.markdown("##### 💼 Recomendaciones")
+                    
+                    if margen_adicional > 0:
+                        st.markdown(
+                            f"- ✅ **Ampliar Flota**: Considera adquirir o alquilar {vehiculos_adicionales} vehículo(s) adicional(es)\n"
+                            f"- ✅ **ROI Potencial**: El margen adicional (${margen_adicional:,.2f}) puede justificar la inversión\n"
+                            f"- ✅ **Aumento de Capacidad**: Pasarías de {num_pedidos} a {num_pedidos + num_excedentes} pedidos atendidos"
+                        )
+                    else:
+                        # Calcular qué precio necesitarías para que sea rentable
+                        precio_base_minimo = (costo_total_adicional - (precio_por_km_sess * distancia_excedente_estimada)) / num_excedentes if num_excedentes > 0 else 0
+                        incremento_precio_base = precio_base_minimo - precio_base_sess
+                        
+                        if incremento_precio_base > 0:
+                            st.markdown(
+                                f"- 💡 **Ajustar Precios**: Para que sea rentable, necesitas aumentar el precio base en ${incremento_precio_base:,.2f}/pedido\n"
+                                f"- 💡 **Precio Base Mínimo**: ${precio_base_minimo:,.2f}/pedido (actual: ${precio_base_sess:,.2f}/pedido)\n"
+                                f"- ⚠️ **Alternativa**: Reduce costos operativos o negocia mejores tarifas de nafta/chofer"
+                            )
+                        else:
+                            st.markdown(
+                                "- ⚠️ **Optimizar Rutas**: Los costos actuales son muy altos para la estructura de precios\n"
+                                "- ⚠️ **Reducir Costos**: Busca mejorar eficiencia o reducir gastos operativos\n"
+                                "- 💡 **Evaluar Demanda**: Quizás estos pedidos no son económicamente viables"
+                            )
 
             except Exception as e:
                 st.error(f"Error en análisis económico: {e}")
@@ -915,13 +1061,18 @@ def main():
                     if vehicle_from_map in active_vehicles:
                         default_index = active_vehicles.index(vehicle_from_map)
 
-            selected_truck = st.selectbox(
+            # Crear opciones de display pre-formateadas
+            vehicle_options = [f"Camión {v}" for v in active_vehicles]
+            
+            selected_truck_display = st.selectbox(
                 "Ver detalles de:",
-                options=active_vehicles,
-                format_func=lambda x: f"Camión {x}",
+                options=vehicle_options,
                 index=default_index,
                 key="selected_truck_detail"
             )
+            
+            # Extraer el número del camión seleccionado
+            selected_truck = active_vehicles[vehicle_options.index(selected_truck_display)]
 
             # Obtener ruta del camión seleccionado
             route_info = next(r for r in all_routes if r['vehicle'] == selected_truck)
